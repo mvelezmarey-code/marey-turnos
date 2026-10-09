@@ -122,4 +122,116 @@ export default function Recepcion() {
             <>
               <div style={S.label}>Qué busca *
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  {["Calentador", "Piezas /
+                  {["Calentador", "Piezas / accesorios"].map((o) => <button key={o} type="button" onClick={() => setF({ ...f, busca: o })} style={S.toggle(f.busca === o, C.blue, C.blueSoft, C.blueDark)}>{o}</button>)}
+                </div>
+              </div>
+              <div style={S.label}>Tipo de cliente *
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                  {["Residencial", "Plomero", "Comercial"].map((o) => <button key={o} type="button" onClick={() => setF({ ...f, tipoCliente: o })} style={S.toggle(f.tipoCliente === o, C.blue, C.blueSoft, C.blueDark)}>{o}</button>)}
+                </div>
+              </div>
+              <label style={S.label}>Nota (opcional)<input value={f.nota} onChange={set("nota")} style={S.input} /></label>
+            </>
+          )}
+          <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+            {msg && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 8, background: msg.ok ? C.greenSoft : C.redSoft, color: msg.ok ? C.greenDark : C.redDark }}>{msg.t}</div>}
+            <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 8, background: hintColor[0], color: hintColor[1] }}>{hint}</div>
+            <button type="submit" disabled={!ok || busy} style={{ ...S.btn(!ok ? "#A8A29E" : tipo === "venta" ? C.blue : C.orange), height: 52, fontSize: 17 }}>
+              {busy ? "Guardando..." : tipo === "venta" ? (ventaLibre ? "Atender ahora" : "Crear turno (queda en espera)") : "Crear turno"}
+            </button>
+          </div>
+        </form>
+
+        {/* ---------- Columna derecha ---------- */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
+          <BuscadorExpediente q={q} setQ={setQ} />
+          {q.trim().length >= 3 ? <Expediente q={q} /> : (
+            <>
+              <Leaderboard titulo="Leaderboard · Registros" rows={lbReg} campo="registros" unidad="reg." />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "start" }}>
+                {/* Ventanilla */}
+                <div style={{ ...S.card, overflow: "hidden" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${C.line}` }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.orangeDark }}>Ventanilla · lista de espera</div>
+                    <div style={{ fontSize: 12, color: C.muted }}>{espera} espera</div>
+                  </div>
+                  {ventanilla.length === 0 && <div style={{ padding: "22px 16px", textAlign: "center", fontSize: 14, color: C.muted }}>No hay nadie en fila.</div>}
+                  {ventanilla.map((t, i) => (
+                    <div key={t.id} style={{ borderTop: `1px solid ${C.soft2}` }}>
+                      <div style={{ display: "flex", gap: 10, padding: "12px 16px", alignItems: "center" }}>
+                        <div style={{ width: 40, height: 40, flex: "none", borderRadius: 10, background: C.orangeSoft, color: C.orangeDark, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: mono, fontWeight: 600 }}>#{i + 1}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 15, fontWeight: 600 }}><span style={{ fontFamily: mono, color: C.orange }}>{t.numero}</span> {t.cliente_nombre}</div>
+                          <div style={{ fontSize: 12, color: C.muted }}>{t.modelo_codigo} · {t.serial}</div>
+                          <div style={{ fontSize: 12, color: C.faint }}>{t.status === "espera" ? "En espera · " + fmtMMSS(now - new Date(t.created_at)) : "Arreglando · " + titulo(t.atendido_por_nombre)}</div>
+                        </div>
+                        {anularId !== t.id && <button type="button" onClick={() => setAnularId(t.id)} style={{ flex: "none", height: 36, padding: "0 10px", borderRadius: 8, border: "1px solid #FCA5A5", background: "#fff", color: C.red, fontSize: 12, fontWeight: 700 }}>Anular</button>}
+                      </div>
+                      {anularId === t.id && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", background: "#FEF2F2", borderTop: "1px solid #FECACA" }}>
+                          <div style={{ flex: 1, fontSize: 13, fontWeight: 600, color: C.redDark }}>¿El cliente se fue? Queda en la bitácora como anulado.</div>
+                          <button type="button" onClick={() => { setAnularId(null); accion("anular_turno", { p_turno: t.id, p_empleado: regId, p_motivo: "Cliente se fue" }); }} style={{ ...S.btn(C.red), height: 36, fontSize: 13 }}>Anular</button>
+                          <button type="button" onClick={() => setAnularId(null)} style={{ ...S.ghost, height: 36, fontSize: 13 }}>Cancelar</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {/* Venta */}
+                <div style={{ ...S.card, overflow: "hidden" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${C.line}` }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.blueDark }}>Venta</div>
+                    <div style={{ fontSize: 12, color: C.muted }}>La atiende recepción</div>
+                  </div>
+                  {ventas.length === 0 && <div style={{ padding: "22px 16px", textAlign: "center", fontSize: 14, color: C.muted }}>Sin fila de venta.</div>}
+                  {ventas.map((t) => {
+                    const proc = t.status === "en_proceso";
+                    return (
+                      <div key={t.id} style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 16px", borderTop: `1px solid ${C.soft2}`, background: proc ? "#EFF6FF" : "transparent" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                          <div>
+                            <div style={{ fontSize: 15, fontWeight: 600 }}><span style={{ fontFamily: mono, color: C.blue }}>{t.numero}</span> {t.cliente_nombre}</div>
+                            <div style={{ fontSize: 12, color: C.muted }}>{t.tipo_cliente} · {t.busca}</div>
+                          </div>
+                          <span style={S.pill(proc ? C.blueSoft : C.soft2, proc ? C.blueDark : C.ink2)}>{proc ? "Atendiendo · " + fmtMMSS(now - new Date(t.iniciado_at)) : "En espera"}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {proc
+                            ? RESULTADOS_VENTA.map((r) => <button key={r} type="button" onClick={() => accion("terminar_turno", { p_turno: t.id, p_empleado: regId, p_resultado: r, p_piezas: [] })} style={{ ...S.btn(C.green), flex: 1, height: 40, fontSize: 13, padding: "0 6px" }}>{r}</button>)
+                            : <button type="button" onClick={() => accion("iniciar_turno", { p_turno: t.id, p_empleado: regId })} style={{ flex: 1, height: 40, borderRadius: 8, border: `2px solid ${C.blue}`, background: "#fff", color: C.blue, fontSize: 13, fontWeight: 700 }}>Atender</button>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* Bitácora */}
+              <div style={{ ...S.card, minHeight: 200 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${C.line}` }}>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>Bitácora de hoy</div>
+                  <div style={{ fontSize: 12, color: C.muted }}>{hoy.length} cerrados</div>
+                </div>
+                {hoy.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: C.muted }}>Todavía no hay turnos terminados ni anulados.</div>}
+                {hoy.map((t) => {
+                  const an = t.status === "anulado";
+                  return (
+                    <div key={t.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderTop: `1px solid ${C.soft2}`, alignItems: "center" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 15, fontWeight: 600 }}><span style={{ fontFamily: mono, color: t.tipo === "venta" ? C.blue : C.orange }}>{t.numero}</span> {t.cliente_nombre} · {t.tipo === "venta" ? "Venta · " + t.busca : t.modelo_codigo}</div>
+                        <div style={{ fontSize: 13, color: C.muted }}>
+                          {an ? "Anulado por " + titulo(t.anulado_por_nombre) : [t.piezas, titulo(t.atendido_por_nombre), t.segundos_servicio != null ? fmtMMSS(t.segundos_servicio * 1000) : null].filter(Boolean).join(" · ")}
+                          {" · Registró " + titulo(t.registrado_por_nombre) + " · " + fmtHora(t.terminado_at)}
+                        </div>
+                      </div>
+                      <span style={S.pill(an ? C.redSoft : C.greenSoft, an ? C.redDark : C.greenDark)}>{an ? "Anulado" : t.resultado}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
