@@ -135,4 +135,19 @@ export function PinPad({ pin, setPin, onOk, okLabel, okColor = C.orange, ready }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", justifyContent: "center", gap: 18, padding: "4px 0" }}>
-        {[0, 1,
+        {[0, 1, 2].map((i) => <div key={i} style={i < pin.length ? { width: 22, height: 22, borderRadius: "50%", background: C.ink } : { width: 22, height: 22, borderRadius: "50%", border: "2px solid #A8A29E" }} />)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+        {keys.map((k) => {
+          const alt = k === "Limpiar" || k === "Borrar";
+          return (
+            <button key={k} type="button"
+              onClick={() => (k === "Limpiar" ? setPin("") : k === "Borrar" ? setPin(pin.slice(0, -1)) : pin.length < 3 && setPin(pin + k))}
+              style={{ height: 58, borderRadius: 10, border: `1px solid ${C.line}`, background: alt ? "#fff" : C.soft, fontSize: alt ? 15 : 24, fontWeight: 600, fontFamily: alt ? "inherit" : mono, color: alt ? C.ink2 : C.ink }}>{k}</button>
+          );
+        })}
+      </div>
+      <button type="button" onClick={onOk} style={{ ...S.btn(ready ? okColor : "#A8A29E"), height: 56, fontSize: 17 }}>{okLabel}</button>
+    </div>
+  );
+}
