@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { C, S, mono, fmtMMSS, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, RESULTADOS_VENTANILLA, SIN_PIEZA } from "./lib.js";
+import { C, S, mono, fmtMMSS, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, RESULTADOS_VENTANILLA, SIN_PIEZA, CAUSAS } from "./lib.js";
 import { Header, Leaderboard, PinPad } from "./components.jsx";
 
 export default function Reparacion() {
@@ -19,6 +19,7 @@ export default function Reparacion() {
   const [pinMsg, setPinMsg] = useState("");
   const [sel, setSel] = useState([]);
   const [res, setRes] = useState(null);
+  const [causa, setCausa] = useState(null);
   const [resMsg, setResMsg] = useState("");
   const [done, setDone] = useState(null);
   const [err, setErr] = useState("");
@@ -33,7 +34,7 @@ export default function Reparacion() {
   const siguiente = lista.find((t) => t.status === "espera" && t.id !== turnoId);
 
   const abrirPin = (t, modo) => { setTurnoId(t.id); setModoPin(modo); setEmp(modo === "continuar" ? tecnicos.find((x) => x.id === t.atendido_por) || null : null); setPin(""); setPinMsg(""); setScreen("pin"); };
-  const volver = () => { setScreen("list"); setTurnoId(null); setEmp(null); setPin(""); setSel([]); setRes(null); setResMsg(""); setErr(""); setConfirmAnular(false); };
+  const volver = () => { setScreen("list"); setTurnoId(null); setEmp(null); setPin(""); setSel([]); setRes(null); setCausa(null); setResMsg(""); setErr(""); setConfirmAnular(false); };
 
   const confirmarPin = async () => {
     if (!emp) return setPinMsg("Primero escoge tu nombre");
@@ -42,7 +43,7 @@ export default function Reparacion() {
       const rows = await rpc("verificar_pin", { p_pin: pin, p_rol: "reparacion" });
       if (!rows || !rows.find((r) => r.id === emp.id)) { setPin(""); return setPinMsg("PIN incorrecto"); }
       if (modoPin === "iniciar") await rpc("iniciar_turno", { p_turno: turnoId, p_empleado: emp.id });
-      setSel([]); setRes(null); setResMsg(""); setErr(""); setScreen("work"); recargar();
+      setSel([]); setRes(null); setCausa(null); setResMsg(""); setErr(""); setScreen("work"); recargar();
     } catch (e) { setPinMsg(e.message); }
   };
 
@@ -59,14 +60,14 @@ export default function Reparacion() {
   const porque = (r) => locked ? "Primero marca la pieza dañada (o Ninguna) y después escoge el resultado."
     : r === "Reparado" && tieneNinguna ? 'Para "Reparado" tienes que marcar la pieza que cambiaste, no "Ninguna".'
     : r === SIN_PIEZA && !sinCat && !tieneNinguna ? `Para "${SIN_PIEZA}" marca "Ninguna" en pieza dañada.` : "";
-  const puedeTerminar = res && !porque(res);
+  const puedeTerminar = res && !porque(res) && causa;
 
   const terminar = async () => {
     if (!puedeTerminar) return;
     try {
-      await rpc("terminar_turno", { p_turno: turnoId, p_empleado: emp.id, p_resultado: res, p_piezas: sinCat ? [] : sel });
+      await rpc("terminar_turno", { p_turno: turnoId, p_empleado: emp.id, p_resultado: res, p_piezas: sinCat ? [] : sel, p_causa: causa });
       const nombres = opciones.filter((p) => sel.includes(p.id)).map((p) => p.nombre).join(", ");
-      setDone({ numero: turno.numero, txt: [turno.cliente_nombre, turno.modelo_codigo, nombres, res, fmtMMSS(now - new Date(turno.iniciado_at)) + " en servicio", titulo(emp.nombre)].filter(Boolean).join(" · ") });
+      setDone({ numero: turno.numero, txt: [turno.cliente_nombre, turno.modelo_codigo, nombres, res, "Causa: " + causa, fmtMMSS(now - new Date(turno.iniciado_at)) + " en servicio", titulo(emp.nombre)].filter(Boolean).join(" · ") });
       setScreen("done"); recargar();
     } catch (e) { setErr(e.message); }
   };
@@ -147,8 +148,8 @@ export default function Reparacion() {
               <div style={{ fontSize: 30, fontWeight: 700 }}><span style={{ fontFamily: mono, color: C.orange }}>{turno.numero}</span> {turno.cliente_nombre}</div>
               <div style={{ textAlign: "right" }}><div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>Atiende</div><div style={{ fontSize: 20, fontWeight: 700 }}>{emp && emp.nombre}</div></div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-              {[["Modelo", turno.modelo_codigo], ["Número de serie", turno.serial], ["Teléfono", turno.cliente_telefono], ["Pueblo", turno.pueblo]].map(([l, v]) => (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+              {[["Modelo", turno.modelo_codigo], ["Número de serie", turno.serial], ["Teléfono", turno.cliente_telefono], ["Pueblo", turno.pueblo], ["Compró en", turno.lugar_compra || "—"]].map(([l, v]) => (
                 <div key={l} style={{ background: C.soft, borderRadius: 10, padding: "12px 14px" }}><div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{l}</div><div style={{ fontSize: 16, fontWeight: 700, marginTop: 4, fontFamily: l === "Número de serie" ? mono : "inherit" }}>{v}</div></div>
               ))}
             </div>
@@ -173,6 +174,16 @@ export default function Reparacion() {
                 );
               })}
             </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>Causa del problema *</div>
+              <div style={{ fontSize: 13, color: C.muted }}>Una sola · para medir por qué fallan</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+              {CAUSAS.map((c) => {
+                const on = causa === c;
+                return <button key={c} type="button" onClick={() => setCausa(c)} style={{ minHeight: 52, padding: "4px 8px", borderRadius: 10, fontSize: 14, border: on ? `2px solid ${C.ink}` : `1px solid ${C.line2}`, background: on ? C.ink : "#fff", color: on ? "#fff" : C.ink, fontWeight: on ? 700 : 500 }}>{c}</button>;
+              })}
+            </div>
             {err && <div style={{ fontSize: 13, fontWeight: 600, color: C.redDark }}>{err}</div>}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -182,7 +193,7 @@ export default function Reparacion() {
             </div>
             <div style={{ ...S.card, borderRadius: 14, padding: 20, display: "flex", flexDirection: "column", gap: 12, flex: 1 }}>
               <button type="button" onClick={terminar} style={{ ...S.btn(puedeTerminar ? C.green : "#A8A29E"), height: 64, fontSize: 19 }}>Terminar turno</button>
-              <div style={{ fontSize: 13, color: C.muted, textAlign: "center" }}>{puedeTerminar ? res : "Marca la pieza dañada (o Ninguna) y el resultado"}</div>
+              <div style={{ fontSize: 13, color: C.muted, textAlign: "center" }}>{puedeTerminar ? res + " · " + causa : !res ? "Marca la pieza dañada (o Ninguna) y el resultado" : "Escoge la causa del problema para terminar"}</div>
               {siguiente && (
                 <div style={{ marginTop: "auto", background: C.soft, borderRadius: 10, padding: "12px 14px" }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Próximo en fila</div>
