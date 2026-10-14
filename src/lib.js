@@ -91,6 +91,8 @@ export async function rpc(fn, args) {
 export const SIN_PIEZA = "Sin pieza dañada, se orientó";
 export const RESULTADOS_VENTANILLA = ["Reparado", "Cliente no quiso reparar", SIN_PIEZA];
 export const RESULTADOS_VENTA = ["Compró", "Cotización", "Solo información"];
+export const LUGARES_COMPRA = ["Home Depot", "Walmart", "Costco", "Ferretería", "Marey directo", "Otro"];
+export const CAUSAS = ["Breaker o amperaje no compatible", "Presión de agua baja", "Flujo bajo o ducha", "Instalación incorrecta", "Agua dura o sedimento", "Uso o expectativa del cliente", "Defecto del producto", "Otro"];
 
 // ---------- Estilos base ----------
 export const S = {
