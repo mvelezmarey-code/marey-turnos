@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase.js";
-import { C, S, mono, fmtMMSS, fmtHora, soloDigitos, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, RESULTADOS_VENTA } from "./lib.js";
+import { C, S, mono, fmtMMSS, fmtHora, soloDigitos, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, RESULTADOS_VENTA, LUGARES_COMPRA } from "./lib.js";
 import { Header, Leaderboard, Expediente, BuscadorExpediente } from "./components.jsx";
 
-const vacio = { nombre: "", telefono: "", pueblo: "", modelo: "", serial: "", busca: "", tipoCliente: "", nota: "" };
+const vacio = { nombre: "", telefono: "", pueblo: "", modelo: "", serial: "", compra: "", busca: "", tipoCliente: "", nota: "" };
 
 export default function Recepcion() {
   const { empleados, modelos } = useCatalogos();
@@ -46,6 +46,7 @@ export default function Recepcion() {
   if (tipo === "ventanilla") {
     if (!f.modelo) faltan.push("modelo");
     if (f.serial.length !== 11) faltan.push("serie de 11 dígitos");
+    if (!f.compra) faltan.push("dónde lo compró");
   } else {
     if (!f.busca) faltan.push("qué busca");
     if (!f.tipoCliente) faltan.push("tipo de cliente");
@@ -61,6 +62,7 @@ export default function Recepcion() {
         p_modelo: tipo === "ventanilla" ? f.modelo : null, p_serial: tipo === "ventanilla" ? f.serial : null,
         p_busca: tipo === "venta" ? f.busca : null, p_tipo_cliente: tipo === "venta" ? f.tipoCliente : null,
         p_nota: tipo === "venta" ? f.nota : null, p_atender_ahora: tipo === "venta" && ventaLibre,
+        p_lugar_compra: tipo === "ventanilla" ? f.compra : null,
       });
       setMsg({ ok: true, t: `Turno ${t.numero} creado para ${f.nombre.trim()}.` });
       setF(vacio); setCliente(null); recargar();
@@ -117,6 +119,11 @@ export default function Recepcion() {
                 <input inputMode="numeric" maxLength={11} value={f.serial} onChange={(e) => setF({ ...f, serial: soloDigitos(e.target.value).slice(0, 11) })}
                   style={{ ...S.input, height: 50, fontSize: 21, letterSpacing: 3, fontFamily: mono, border: `2px solid ${f.serial.length === 11 ? C.green : C.line2}` }} />
               </label>
+              <div style={S.label}>¿Dónde lo compró? *
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                  {LUGARES_COMPRA.map((o) => <button key={o} type="button" onClick={() => setF({ ...f, compra: o })} style={S.toggle(f.compra === o, C.orange, C.orangeSoft, C.orangeDark)}>{o}</button>)}
+                </div>
+              </div>
             </>
           ) : (
             <>
