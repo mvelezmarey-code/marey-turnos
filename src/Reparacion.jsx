@@ -153,6 +153,7 @@ export default function Reparacion() {
                 <div key={l} style={{ background: C.soft, borderRadius: 10, padding: "12px 14px" }}><div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{l}</div><div style={{ fontSize: 16, fontWeight: 700, marginTop: 4, fontFamily: l === "Número de serie" ? mono : "inherit" }}>{v}</div></div>
               ))}
             </div>
+            {turno.nota && <div style={{ padding: "10px 14px", borderRadius: 10, background: "#EEEDFE", color: "#3C3489", fontSize: 14 }}><span style={{ fontWeight: 700 }}>Llamada previa: </span>{turno.nota}</div>}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
               <div style={{ fontSize: 15, fontWeight: 700 }}>Pieza dañada</div>
               <div style={{ fontSize: 13, color: C.muted }}>Opciones de {turno.modelo_codigo} · puedes marcar varias</div>
