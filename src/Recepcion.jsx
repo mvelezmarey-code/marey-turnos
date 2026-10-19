@@ -47,7 +47,7 @@ export default function Recepcion() {
   const cargarLista = () => llamadasDesde(desdeFiltro(filtro)).then((d) => setLista(d || [])).catch(() => setLista([]));
   useEffect(() => { if (bit === "llamadas") cargarLista(); }, [bit, filtro]); // eslint-disable-line
 
-  // Pueblo: un solo dropdown (lista de MareyApp) para Ventanilla, Venta y Llamada
+  // Pueblo: un solo dropdown (lista de MareyApp) para Reparación, Venta y Llamada
   const escogerPueblo = (id) => {
     const m = cat.municipios.find((x) => String(x.id) === String(id));
     setFl((p) => ({ ...p, municipio_id: id }));
@@ -180,7 +180,7 @@ export default function Recepcion() {
             </select>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-            <button type="button" onClick={() => setTipo("ventanilla")} style={tab(tipo === "ventanilla", C.orange)}>Ventanilla</button>
+            <button type="button" onClick={() => setTipo("ventanilla")} style={tab(tipo === "ventanilla", C.orange)}>Reparación</button>
             <button type="button" onClick={() => setTipo("venta")} style={tab(tipo === "venta", C.blue)}>Venta</button>
             <button type="button" onClick={() => setTipo("llamada")} style={tab(tipo === "llamada", MORADO)}>Llamada</button>
           </div>
@@ -295,10 +295,10 @@ export default function Recepcion() {
             <>
               <Leaderboard titulo="Leaderboard · Registros" rows={lbReg} campo="registros" unidad="reg." />
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "start" }}>
-                {/* Ventanilla */}
+                {/* Reparación */}
                 <div style={{ ...S.card, overflow: "hidden" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${C.line}` }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: C.orangeDark }}>Ventanilla · lista de espera</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.orangeDark }}>Reparación · lista de espera</div>
                     <div style={{ fontSize: 12, color: C.muted }}>{espera} espera</div>
                   </div>
                   {ventanilla.length === 0 && <div style={{ padding: "22px 16px", textAlign: "center", fontSize: 14, color: C.muted }}>No hay nadie en fila.</div>}
