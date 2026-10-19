@@ -369,4 +369,46 @@ export default function Recepcion() {
                         <button key={k} type="button" onClick={() => setFiltro(k)} style={{ padding: "6px 12px", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, background: filtro === k ? MORADO : "#F0F0F0", color: filtro === k ? "#fff" : "#888" }}>{l}</button>
                       ))}
                     </div>
-                    {lista.length
+                    {lista.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: C.muted }}>No hay llamadas en este periodo.</div>}
+                    {lista.map((l) => {
+                      const e = estadoLlamada(l);
+                      return (
+                        <div key={l.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderTop: `1px solid ${C.soft2}`, alignItems: "center" }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 15, fontWeight: 600 }}>{l.cliente_nombre}</div>
+                            <div style={{ fontSize: 13, color: C.muted }}>{[l.cliente_telefono, l.municipio, l.modelo, l.antiguedad].filter(Boolean).join(" — ")}</div>
+                            <div style={{ fontSize: 12, color: C.faint }}>{l.problema ? l.problema + " · " : ""}Registró: {l.registrado_por || "—"}</div>
+                          </div>
+                          <div style={{ textAlign: "right", flex: "none" }}>
+                            <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: e.b, color: e.c }}>{e.t}</span>
+                            <div style={{ fontSize: 11, color: "#A8A29E", marginTop: 4 }}>{fechaCorta(l.created_at)}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {bit === "turnos" && hoy.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: C.muted }}>Todavía no hay turnos terminados ni anulados.</div>}
+                {bit === "turnos" && hoy.map((t) => {
+                  const an = t.status === "anulado";
+                  return (
+                    <div key={t.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderTop: `1px solid ${C.soft2}`, alignItems: "center" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 15, fontWeight: 600 }}><span style={{ fontFamily: mono, color: t.tipo === "venta" ? C.blue : C.orange }}>{t.numero}</span> {t.cliente_nombre} · {t.tipo === "venta" ? "Venta · " + t.busca : t.modelo_codigo}</div>
+                        <div style={{ fontSize: 13, color: C.muted }}>
+                          {an ? "Anulado por " + titulo(t.anulado_por_nombre) : [t.piezas, titulo(t.atendido_por_nombre), t.segundos_servicio != null ? fmtMMSS(t.segundos_servicio * 1000) : null].filter(Boolean).join(" · ")}
+                          {" · Registró " + titulo(t.registrado_por_nombre) + " · " + fmtHora(t.terminado_at)}
+                        </div>
+                      </div>
+                      <span style={S.pill(an ? C.redSoft : C.greenSoft, an ? C.redDark : C.greenDark)}>{an ? "Anulado" : t.resultado}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
