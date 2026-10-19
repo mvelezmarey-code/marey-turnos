@@ -47,6 +47,18 @@ export default function Recepcion() {
   const cargarLista = () => llamadasDesde(desdeFiltro(filtro)).then((d) => setLista(d || [])).catch(() => setLista([]));
   useEffect(() => { if (bit === "llamadas") cargarLista(); }, [bit, filtro]); // eslint-disable-line
 
+  // Pueblo: un solo dropdown (lista de MareyApp) para Ventanilla, Venta y Llamada
+  const escogerPueblo = (id) => {
+    const m = cat.municipios.find((x) => String(x.id) === String(id));
+    setFl((p) => ({ ...p, municipio_id: id }));
+    setF((p) => ({ ...p, pueblo: m ? m.nombre : "" }));
+  };
+  const idDePueblo = (nombre) => {
+    const n = String(nombre || "").trim().toLowerCase();
+    const m = cat.municipios.find((x) => x.nombre.toLowerCase() === n);
+    return m ? String(m.id) : "";
+  };
+
   // Cliente conocido por teléfono: llena nombre y pueblo
   const tel = soloDigitos(f.telefono);
   // Historial de llamadas de ese teléfono (MareyApp)
@@ -70,9 +82,12 @@ export default function Recepcion() {
     if (tel.length !== 10) { setCliente(null); return; }
     supabase.from("clientes").select("*").eq("telefono", tel).maybeSingle().then(({ data }) => {
       setCliente(data || null);
-      if (data) setF((p) => ({ ...p, nombre: p.nombre || data.nombre, pueblo: p.pueblo || data.pueblo }));
+      if (data) {
+        setF((p) => ({ ...p, nombre: p.nombre || data.nombre, pueblo: p.pueblo || data.pueblo }));
+        setFl((p) => ({ ...p, municipio_id: p.municipio_id || idDePueblo(data.pueblo) }));
+      }
     });
-  }, [tel]);
+  }, [tel, cat]); // eslint-disable-line
 
   const ventanilla = abiertos.filter((t) => t.tipo === "ventanilla");
   const ventas = abiertos.filter((t) => t.tipo === "venta");
@@ -193,14 +208,12 @@ export default function Recepcion() {
           <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Información del cliente</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label style={S.label}>Teléfono *<input type="tel" value={f.telefono} onChange={set("telefono")} placeholder="787-000-0000" style={S.input} /></label>
-            {tipo === "llamada"
-              ? <label style={S.label}>Pueblo *
-                  <select value={fl.municipio_id} onChange={(e) => setFl({ ...fl, municipio_id: e.target.value })} style={{ ...S.input, height: 44 }}>
-                    <option value="">Escoge</option>
-                    {cat.municipios.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
-                  </select>
-                </label>
-              : <label style={S.label}>Pueblo *<input value={f.pueblo} onChange={set("pueblo")} style={S.input} /></label>}
+            <label style={S.label}>Pueblo *
+              <select value={fl.municipio_id} onChange={(e) => escogerPueblo(e.target.value)} style={{ ...S.input, height: 44 }}>
+                <option value="">Escoge</option>
+                {cat.municipios.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+              </select>
+            </label>
           </div>
           <label style={S.label}>Nombre *<input value={f.nombre} onChange={set("nombre")} style={S.input} /></label>
 
@@ -356,46 +369,4 @@ export default function Recepcion() {
                         <button key={k} type="button" onClick={() => setFiltro(k)} style={{ padding: "6px 12px", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, background: filtro === k ? MORADO : "#F0F0F0", color: filtro === k ? "#fff" : "#888" }}>{l}</button>
                       ))}
                     </div>
-                    {lista.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: C.muted }}>No hay llamadas en este periodo.</div>}
-                    {lista.map((l) => {
-                      const e = estadoLlamada(l);
-                      return (
-                        <div key={l.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderTop: `1px solid ${C.soft2}`, alignItems: "center" }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 15, fontWeight: 600 }}>{l.cliente_nombre}</div>
-                            <div style={{ fontSize: 13, color: C.muted }}>{[l.cliente_telefono, l.municipio, l.modelo, l.antiguedad].filter(Boolean).join(" — ")}</div>
-                            <div style={{ fontSize: 12, color: C.faint }}>{l.problema ? l.problema + " · " : ""}Registró: {l.registrado_por || "—"}</div>
-                          </div>
-                          <div style={{ textAlign: "right", flex: "none" }}>
-                            <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: e.b, color: e.c }}>{e.t}</span>
-                            <div style={{ fontSize: 11, color: "#A8A29E", marginTop: 4 }}>{fechaCorta(l.created_at)}</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {bit === "turnos" && hoy.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 14, color: C.muted }}>Todavía no hay turnos terminados ni anulados.</div>}
-                {bit === "turnos" && hoy.map((t) => {
-                  const an = t.status === "anulado";
-                  return (
-                    <div key={t.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderTop: `1px solid ${C.soft2}`, alignItems: "center" }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 15, fontWeight: 600 }}><span style={{ fontFamily: mono, color: t.tipo === "venta" ? C.blue : C.orange }}>{t.numero}</span> {t.cliente_nombre} · {t.tipo === "venta" ? "Venta · " + t.busca : t.modelo_codigo}</div>
-                        <div style={{ fontSize: 13, color: C.muted }}>
-                          {an ? "Anulado por " + titulo(t.anulado_por_nombre) : [t.piezas, titulo(t.atendido_por_nombre), t.segundos_servicio != null ? fmtMMSS(t.segundos_servicio * 1000) : null].filter(Boolean).join(" · ")}
-                          {" · Registró " + titulo(t.registrado_por_nombre) + " · " + fmtHora(t.terminado_at)}
-                        </div>
-                      </div>
-                      <span style={S.pill(an ? C.redSoft : C.greenSoft, an ? C.redDark : C.greenDark)}>{an ? "Anulado" : t.resultado}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+                    {lista.length
