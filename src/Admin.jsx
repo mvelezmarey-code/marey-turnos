@@ -130,13 +130,13 @@ export default function Admin() {
             <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
               <h2 style={{ fontSize: 18 }}>Visitas por día de la semana (promedio)</h2>
               <div style={{ display: "flex", gap: 16, fontSize: 13, color: C.ink2 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 6 }}><i style={{ width: 12, height: 12, borderRadius: 3, background: C.orange, display: "inline-block" }} />Ventanilla</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}><i style={{ width: 12, height: 12, borderRadius: 3, background: C.orange, display: "inline-block" }} />Reparación</span>
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }}><i style={{ width: 12, height: 12, borderRadius: 3, background: C.blue, display: "inline-block" }} />Venta</span>
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, alignItems: "end", height: 240, borderBottom: `1px solid ${C.line2}` }}>
               {m.porDia.map((d) => (
-                <div key={d.nombre} title={`${d.nombre}: ${d.v.toFixed(1)} ventanilla, ${d.b.toFixed(1)} venta por día`} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, height: "100%", justifyContent: "flex-end", borderRadius: "8px 8px 0 0", ...(d.nombre === "Sábado" ? { background: C.soft2, outline: `2px dashed ${C.ink}`, outlineOffset: -2 } : {}) }}>
+                <div key={d.nombre} title={`${d.nombre}: ${d.v.toFixed(1)} reparación, ${d.b.toFixed(1)} venta por día`} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, height: "100%", justifyContent: "flex-end", borderRadius: "8px 8px 0 0", ...(d.nombre === "Sábado" ? { background: C.soft2, outline: `2px dashed ${C.ink}`, outlineOffset: -2 } : {}) }}>
                   <div style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>{(d.v + d.b).toFixed(1)}</div>
                   <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 190, width: "100%", justifyContent: "center" }}>
                     <div style={{ width: "38%", maxWidth: 40, height: Math.round(d.v / m.max * 180), background: C.orange, borderRadius: "4px 4px 0 0" }} />
@@ -151,7 +151,7 @@ export default function Admin() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 18 }}>
             <section style={{ ...S.card, borderRadius: 14, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
               <h2 style={{ fontSize: 18 }}>Razón de la visita</h2>
-              <h3 style={{ fontSize: 15, color: C.orangeDark }}>Ventanilla · resultado</h3>
+              <h3 style={{ fontSize: 15, color: C.orangeDark }}>Reparación · resultado</h3>
               {barras(m.resV, C.orange)}
               <h3 style={{ fontSize: 15, color: C.blueDark, marginTop: 8 }}>Venta · resultado</h3>
               {barras(m.resB, C.blue)}
