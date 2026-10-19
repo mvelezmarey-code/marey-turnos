@@ -36,12 +36,15 @@ export function useCatalogos() {
   const [empleados, setEmpleados] = useState([]);
   const [modelos, setModelos] = useState([]);
   const [piezas, setPiezas] = useState([]);
+  const [causas, setCausas] = useState([]);
+  const cargarPiezas = useCallback(() => supabase.from("piezas_por_modelo").select("*").order("orden").then(({ data }) => data && setPiezas(data)), []);
+  const cargarCausas = useCallback(() => supabase.from("causas").select("*").eq("activo", true).order("orden").then(({ data }) => data && setCausas(data)), []);
   useEffect(() => {
     supabase.from("empleados_publicos").select("*").then(({ data }) => data && setEmpleados(data));
     supabase.from("modelos").select("*").eq("activo", true).order("orden").then(({ data }) => data && setModelos(data));
-    supabase.from("piezas_por_modelo").select("*").order("orden").then(({ data }) => data && setPiezas(data));
-  }, []);
-  return { empleados, modelos, piezas };
+    cargarPiezas(); cargarCausas();
+  }, [cargarPiezas, cargarCausas]);
+  return { empleados, modelos, piezas, causas, cargarPiezas, cargarCausas };
 }
 
 // ---------- Turnos abiertos + de hoy, con realtime ----------
@@ -92,7 +95,6 @@ export const SIN_PIEZA = "Sin pieza dañada, se orientó";
 export const RESULTADOS_VENTANILLA = ["Reparado", "Cliente no quiso reparar", SIN_PIEZA];
 export const RESULTADOS_VENTA = ["Compró", "Cotización", "Solo información"];
 export const LUGARES_COMPRA = ["Home Depot", "Walmart", "Costco", "Ferretería", "Marey directo", "Otro"];
-export const CAUSAS = ["Breaker o amperaje no compatible", "Presión de agua baja", "Flujo bajo o ducha", "Instalación incorrecta", "Agua dura o sedimento", "Uso o expectativa del cliente", "Defecto del producto", "Otro"];
 
 // ---------- Estilos base ----------
 export const S = {
