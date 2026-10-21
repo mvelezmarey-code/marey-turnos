@@ -1,33 +1,24 @@
-import React, { useEffect, useState } from "react";
-import Recepcion from "./Recepcion.jsx";
-import Reparacion from "./Reparacion.jsx";
-import Admin from "./Admin.jsx";
-import { C } from "./lib.js";
-
-// Rutas por hash para que cada equipo abra su vista directo:
-//   computadora de recepción → /#/recepcion
-//   iPad de reparación       → /#/reparacion
-//   admin                    → /#/admin
-const ruta = () => (window.location.hash || "").replace(/^#\/?/, "");
-
-export default function App() {
-  const [r, setR] = useState(ruta());
-  useEffect(() => { const h = () => setR(ruta()); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
-  if (r === "recepcion") return <Recepcion />;
-  if (r === "reparacion") return <Reparacion />;
-  if (r === "admin") return <Admin />;
-  const opts = [["recepcion", "Recepción", "Computadora de recepción: turnos y ventas", C.orange], ["reparacion", "Reparación", "iPad de los técnicos", C.ink], ["admin", "Administración", "Volumen, sábados y expedientes", "#44403C"]];
-  return (
-    <div style={{ minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ width: 520, display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ fontSize: 26, fontWeight: 700, textAlign: "center", marginBottom: 8 }}>Turnos · Servicio Ventanilla</div>
-        {opts.map(([k, t, s, bg]) => (
-          <a key={k} href={"#/" + k} style={{ textDecoration: "none", background: bg, color: "#fff", borderRadius: 14, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontSize: 20, fontWeight: 700 }}>{t}</span>
-            <span style={{ fontSize: 14, opacity: 0.85 }}>{s}</span>
-          </a>
-        ))}
-      </div>
-    </div>
-  );
-}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Turnos · Marey</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #root { height: 100%; }
+    body { font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; background: #F3F2EF; color: #1C1917; }
+    button { cursor: pointer; font-family: inherit; }
+    button:disabled { cursor: not-allowed; }
+    input, select { font-family: inherit; outline: none; }
+    input:focus, select:focus { border-color: #B45309 !important; box-shadow: 0 0 0 3px rgba(180,83,9,0.14); background-color: #FFFFFF !important; }
+    input::placeholder { color: #A8A29E; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+</html>
