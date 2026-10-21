@@ -125,4 +125,302 @@ export default function Recepcion() {
     setBusy(true); setLlMsg(null);
     try {
       await registrarLlamada({ p_registra: regNombre, p_nombre: f.nombre, p_telefono: tel, p_municipio_id: Number(fl.municipio_id), p_modelo_id: Number(fl.modelo_id),
-        p_antiguedad_id: fl.antiguedad_id ? Number(fl.antiguedad_id) : null, p_problema: fl.problema, p_status: r.status, p_centro: r.centro
+        p_antiguedad_id: fl.antiguedad_id ? Number(fl.antiguedad_id) : null, p_problema: fl.problema, p_status: r.status, p_centro: r.centro });
+      setLlMsg({ ok: true, t: `Llamada de ${f.nombre.trim()} guardada en MareyApp · ${r.label}.` });
+      limpiar(); setBit("llamadas"); cargarLista();
+    } catch (e) { setLlMsg({ ok: false, t: e.message }); }
+    setBusy(false);
+  };
+
+  // Nota que ve el técnico: lo que dijo por teléfono y si venía citado
+  const notaLlamada = () => {
+    const u = hist[0];
+    if (!u) return null;
+    const partes = [];
+    if (citado) partes.push(`Llegó a tienda (citado por ${citado.registrado_por || "agente"} el ${fechaCorta(citado.created_at)})`);
+    if (u.problema) partes.push(`Por teléfono: ${u.problema}`);
+    return partes.join(" · ") || null;
+  };
+
+  const crear = async () => {
+    if (!ok || busy) return;
+    setBusy(true); setMsg(null);
+    try {
+      const t = await rpc("crear_turno", {
+        p_tipo: "ventanilla", p_registrado_por: regId, p_nombre: f.nombre, p_telefono: tel, p_pueblo: f.pueblo,
+        p_modelo: f.modelo, p_serial: f.serial, p_busca: null, p_tipo_cliente: null,
+        p_nota: notaLlamada(), p_atender_ahora: false, p_lugar_compra: f.compra,
+      });
+      setMsg({ ok: true, t: `Turno ${t.numero} creado para ${f.nombre.trim()}.` + (citado ? " Llegó a tienda (citado por teléfono)." : "") });
+      limpiar(); recargar();
+    } catch (e) { setMsg({ ok: false, t: e.message }); }
+    setBusy(false);
+  };
+
+  const anular = async (t) => {
+    setAnularId(null);
+    try { await rpc("anular_turno", { p_turno: t.id, p_empleado: regId, p_motivo: "Cliente se fue" }); recargar(); } catch (e) { setMsg({ ok: false, t: e.message }); }
+  };
+
+  const sumarVenta = async () => {
+    if (!regId) return;
+    try { const n = await rpc("registrar_visita_venta", { p_empleado: regId }); visitas.setN(n); setVentaMsg({ ok: true, t: "Cliente de venta anotado" }); }
+    catch (e) { setVentaMsg({ ok: false, t: e.message }); }
+  };
+  const deshacerVenta = async () => {
+    try { const n = await rpc("deshacer_visita_venta", { p_empleado: regId }); visitas.setN(n); setVentaMsg({ ok: true, t: "Se quitó el último" }); }
+    catch (e) { setVentaMsg({ ok: false, t: e.message }); }
+  };
+  useEffect(() => { if (!ventaMsg) return; const t = setTimeout(() => setVentaMsg(null), 4000); return () => clearTimeout(t); }, [ventaMsg]);
+
+  const hint = !ok ? `Falta: ${faltan.join(", ")}`
+    : (citado ? "Llegó a tienda (citado por teléfono) · " : "") + (espera === 0 ? "no hay fila, sale de primero en el iPad" : `entra #${espera + 1} en la lista`);
+  const kpi = (l, v, color, extra) => (
+    <div style={{ ...S.card, borderRadius: 14, boxShadow: "none", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+      <div style={S.cap}>{l}</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.5, color }}>{v}</div>
+        {extra}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.bg, overflow: "hidden" }}>
+      <Header subtitulo="Computadora de recepción">
+        <button type="button" onClick={() => setBuscar(true)} style={{ height: 34, padding: "0 14px", borderRadius: 17, border: "1px solid #57534E", background: "transparent", color: "#FAFAF9", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+          Buscar cliente
+        </button>
+      </Header>
+
+      <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "420px minmax(0, 1fr)", gap: 20, padding: "20px 28px" }}>
+        {/* ---------- Formulario ---------- */}
+        <form onSubmit={(e) => { e.preventDefault(); if (tipo === "ventanilla") crear(); }} style={{ ...S.card, padding: "18px 22px", display: "flex", flexDirection: "column", gap: 12, minHeight: 0, overflowY: "auto" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.2 }}>{tipo === "llamada" ? "Nueva llamada" : "Nuevo turno"}</div>
+            <label style={{ ...S.cap, display: "flex", alignItems: "center", gap: 8 }}>Registra
+              <select value={regId || ""} onChange={(e) => setRegId(Number(e.target.value))} aria-label="Quién registra"
+                style={{ ...S.select, width: "auto", height: 38, borderRadius: 19, fontSize: 14, fontWeight: 700, paddingLeft: 14 }}>
+                {registradores.map((r) => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div style={{ ...S.segWrap, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+            <button type="button" onClick={() => setTipo("ventanilla")} style={S.seg(tipo === "ventanilla")}><span style={S.dot(tipo === "ventanilla" ? C.orange : C.gris)} />Reparación</button>
+            <button type="button" onClick={() => setTipo("llamada")} style={S.seg(tipo === "llamada")}><span style={S.dot(tipo === "llamada" ? MORADO : C.gris)} />Llamada</button>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+            <label style={S.label}>Teléfono<input type="tel" value={f.telefono} onChange={set("telefono")} placeholder="787-000-0000" style={S.input} /></label>
+            <label style={S.label}>Pueblo
+              <select value={fl.municipio_id} onChange={(e) => escogerPueblo(e.target.value)} style={S.select}>
+                <option value="">Escoge</option>
+                {cat.municipios.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+              </select>
+            </label>
+          </div>
+          <label style={S.label}>Nombre<input value={f.nombre} onChange={set("nombre")} style={S.input} /></label>
+
+          {hist.length > 0 && (
+            <div style={{ borderRadius: 12, background: C.moradoSoft, padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6, color: C.moradoDark, flex: "none" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700 }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={MORADO} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8.1 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z" /></svg>
+                  Llamó {hist.length} {hist.length === 1 ? "vez" : "veces"} antes
+                </div>
+                <button type="button" onClick={() => setVerHist(!verHist)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 8, background: "transparent", color: MORADO, fontSize: 13, fontWeight: 700 }}>{verHist ? "Ocultar" : "Ver"}</button>
+              </div>
+              {verHist && hist.slice(0, 2).map((l) => {
+                const e = estadoLlamada(l);
+                return (
+                  <div key={l.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
+                    <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><b>{fmtDia(l.created_at)}</b> · {l.problema || l.modelo || "—"} · {l.registrado_por || "—"}</span>
+                    <span style={{ flex: "none", fontWeight: 700, color: e.c }}>{e.t}</span>
+                  </div>
+                );
+              })}
+              {verHist && hist.length > 2 && <div style={{ fontSize: 12, fontWeight: 600 }}>y {hist.length - 2} más · búscalo en "Buscar cliente"</div>}
+            </div>
+          )}
+          {cliente && hist.length === 0 && <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: C.greenDark, flex: "none" }}><span style={S.dot(C.green)} />Cliente conocido: {cliente.nombre} · {cliente.pueblo}</div>}
+
+          {tipo === "llamada" ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                <label style={S.label}>Modelo
+                  <select value={fl.modelo_id} onChange={(e) => setFl({ ...fl, modelo_id: e.target.value })} style={S.select}>
+                    <option value="">Escoge</option>
+                    {cat.modelos.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+                  </select>
+                </label>
+                <label style={S.label}>Hace cuánto la tiene
+                  <select value={fl.antiguedad_id} onChange={(e) => setFl({ ...fl, antiguedad_id: e.target.value })} style={S.select}>
+                    <option value="">Escoge</option>
+                    {cat.antiguedad.map((a) => <option key={a.id} value={a.id}>{a.rango}</option>)}
+                  </select>
+                </label>
+              </div>
+              <label style={S.label}>Problema<input value={fl.problema} onChange={(e) => setFl({ ...fl, problema: e.target.value })} placeholder="Breve descripción" style={S.input} /></label>
+              <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                {llMsg && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: llMsg.ok ? "#E1F5EE" : C.redSoft, color: llMsg.ok ? "#0F6E56" : C.redDark }}>{llMsg.t}</div>}
+                {sinUsuarioLl && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: C.orangeSoft, color: C.orangeDark }}>{regNombre} no tiene usuario en MareyApp. Escoge otra persona en "Registra".</div>}
+                <div style={S.cap}>{okL ? "¿Qué pasó? · se guarda en MareyApp" : `Falta: ${faltanL.join(", ")}`}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
+                  {RESULTADOS_LLAMADA.map((r) => (
+                    <button key={r.label} type="button" onClick={() => guardarLlamada(r)} disabled={!okL || busy}
+                      style={{ height: 44, padding: "0 8px", borderRadius: 12, border: "none", fontSize: 14, fontWeight: 700, color: "#fff", background: okL ? r.color : C.gris }}>{r.label}</button>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                <label style={S.label}>Modelo
+                  <select value={f.modelo} onChange={set("modelo")} style={S.select}>
+                    <option value="">Escoge</option>
+                    {modelos.map((m) => <option key={m.codigo} value={m.codigo}>{m.nombre}</option>)}
+                  </select>
+                </label>
+                <label style={S.label}>
+                  <span style={{ display: "flex", justifyContent: "space-between" }}><span>Serie</span><span style={{ color: f.serial.length === 11 ? C.green : C.faint }}>{f.serial.length}/11</span></span>
+                  <input inputMode="numeric" maxLength={11} value={f.serial} onChange={(e) => setF({ ...f, serial: soloDigitos(e.target.value).slice(0, 11) })}
+                    style={{ ...S.input, fontFamily: mono, fontWeight: 600, letterSpacing: 1, ...(f.serial.length === 11 ? { borderColor: "#86C59B", background: "#F4FBF6" } : {}) }} />
+                </label>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={S.cap}>¿Dónde lo compró?</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {LUGARES_COMPRA.map((o) => <button key={o} type="button" onClick={() => setF({ ...f, compra: o })} style={S.chip(f.compra === o)}>{o}</button>)}
+                </div>
+              </div>
+              <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+                {msg && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: msg.ok ? C.greenSoft : C.redSoft, color: msg.ok ? C.greenDark : C.redDark }}>{msg.t}</div>}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: ok ? C.muted : C.redDark }}><span style={S.dot(ok ? C.green : C.red)} />{hint}</div>
+                <button type="submit" disabled={!ok || busy} style={{ ...S.btn(ok ? C.orange : C.gris), fontSize: 17 }}>{busy ? "Guardando..." : "Crear turno"}</button>
+              </div>
+            </>
+          )}
+        </form>
+
+        {/* ---------- Columna derecha ---------- */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12, flex: "none" }}>
+            {kpi("Clientes en espera", espera, C.orangeDark)}
+            {kpi("Arreglando", arreglando, C.ink)}
+            {kpi("Cerrados hoy", cerrados, C.green)}
+            {kpi("Clientes de venta", visitas.n, C.blueDark,
+              <button type="button" onClick={sumarVenta} title="Toca una vez por cada cliente que vino a comprar o preguntar"
+                style={{ height: 34, padding: "0 12px", borderRadius: 17, border: `1px solid ${C.blue}`, background: C.blueSoft, color: C.blueDark, fontSize: 13, fontWeight: 700, flex: "none" }}>+ 1</button>)}
+          </div>
+          {ventaMsg && (
+            <div style={{ marginTop: -8, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, fontSize: 12, fontWeight: 600, color: ventaMsg.ok ? C.blueDark : C.redDark, flex: "none" }}>
+              {ventaMsg.t}
+              {ventaMsg.ok && ventaMsg.t !== "Se quitó el último" && <button type="button" onClick={deshacerVenta} style={{ border: "none", background: "transparent", color: C.faint, fontSize: 12, fontWeight: 700, textDecoration: "underline" }}>Deshacer</button>}
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 16, flex: "none" }}>
+            <div style={{ ...S.card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 700 }}><span style={S.dot(C.orange)} />Reparación</div>
+                <div style={{ fontSize: 12, color: C.faint }}>Clientes en espera · se arreglan en el iPad</div>
+              </div>
+              {fila.length === 0 && <div style={{ padding: "26px 18px", borderTop: `1px solid ${C.soft2}`, textAlign: "center", fontSize: 14, color: C.faint }}>No hay nadie en la lista.</div>}
+              {fila.slice(0, MAX_FILA).map((t) => {
+                const proc = t.status === "en_proceso";
+                return (
+                  <div key={t.id} style={{ borderTop: `1px solid ${C.soft2}` }}>
+                    <div style={{ display: "flex", gap: 12, padding: "10px 18px", alignItems: "center" }}>
+                      <div style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: C.orange, width: 46, flex: "none" }}>{t.numero}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.cliente_nombre}</div>
+                        <div style={{ fontSize: 12, color: C.faint }}>{nm(t.modelo_codigo)} · {t.serial}</div>
+                      </div>
+                      <span style={S.pill(proc ? C.orangeSoft : C.soft2, proc ? C.orangeDark : C.ink2)}>{proc ? titulo(t.atendido_por_nombre) + " · " + fmtMMSS(now - new Date(t.iniciado_at)) : "Espera " + fmtMMSS(now - new Date(t.created_at))}</span>
+                      {anularId !== t.id && <button type="button" onClick={() => setAnularId(t.id)} style={{ flex: "none", height: 32, padding: "0 10px", borderRadius: 16, border: `1px solid ${C.line2}`, background: "#fff", color: C.red, fontSize: 12, fontWeight: 700 }}>Anular</button>}
+                    </div>
+                    {anularId === t.id && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 18px", background: C.redSoft }}>
+                        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, color: C.redDark }}>¿El cliente se fue? Queda en la bitácora como anulado.</div>
+                        <button type="button" onClick={() => anular(t)} style={{ height: 34, padding: "0 14px", borderRadius: 10, border: "none", background: C.red, color: "#fff", fontSize: 13, fontWeight: 700 }}>Anular</button>
+                        <button type="button" onClick={() => setAnularId(null)} style={{ ...S.ghost, height: 34, fontSize: 13 }}>No</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {fila.length > MAX_FILA && <div style={{ padding: "10px 18px", borderTop: `1px solid ${C.soft2}`, fontSize: 13, fontWeight: 600, color: C.orangeDark }}>+ {fila.length - MAX_FILA} más en la lista</div>}
+            </div>
+            <Leaderboard titulo="Registros de hoy" rows={lbReg} campo="registros" unidad="registros" max={4} />
+          </div>
+
+          {/* Bitácora: la lista se mueve por dentro, la pantalla no */}
+          <div style={{ ...S.card, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "12px 18px", flex: "none" }}>
+              <div style={{ display: "flex", gap: 2, background: C.soft2, borderRadius: 10, padding: 3 }}>
+                {[["turnos", "Bitácora de hoy"], ["llamadas", "Llamadas"]].map(([k, l]) => (
+                  <button key={k} type="button" onClick={() => setBit(k)} style={{ ...S.seg(bit === k), minHeight: 32, padding: "0 14px", fontSize: 13, borderRadius: 8 }}>{l}</button>
+                ))}
+              </div>
+              {bit === "llamadas" ? (
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[["hoy", "Hoy"], ["semana", "Semana"], ["mes", "Mes"], ["ano", "Año"]].map(([k, l]) => (
+                    <button key={k} type="button" onClick={() => setFiltro(k)} style={{ height: 30, padding: "0 12px", borderRadius: 15, border: "none", fontSize: 12, fontWeight: filtro === k ? 700 : 600, background: filtro === k ? MORADO : "transparent", color: filtro === k ? "#fff" : C.muted }}>{l}</button>
+                  ))}
+                </div>
+              ) : <div style={{ fontSize: 13, color: C.faint }}>{bitacora.length} cerrados hoy</div>}
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+              {bit === "llamadas" && lista.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>No hay llamadas en este periodo.</div>}
+              {bit === "llamadas" && lista.map((l) => {
+                const e = estadoLlamada(l);
+                return (
+                  <div key={l.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 18px", borderTop: `1px solid ${C.soft2}`, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
+                      <div style={{ fontFamily: mono, fontSize: 12, color: C.faint, width: 70, flex: "none" }}>{filtro === "hoy" ? fmtHora(l.created_at) : fmtDia(l.created_at)}</div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{l.cliente_nombre}</div>
+                        <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[l.cliente_telefono, l.municipio, l.modelo].filter(Boolean).join(" · ")}{l.problema ? " · " + l.problema : ""} · registró {l.registrado_por || "—"}</div>
+                      </div>
+                    </div>
+                    <span style={S.pill(e.b, e.c)}>{e.t}</span>
+                  </div>
+                );
+              })}
+              {bit === "turnos" && bitacora.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>Todavía no hay turnos terminados ni anulados.</div>}
+              {bit === "turnos" && bitacora.map((t) => {
+                const an = t.status === "anulado";
+                return (
+                  <div key={t.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 18px", borderTop: `1px solid ${C.soft2}`, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
+                      <div style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: C.orange, width: 46, flex: "none" }}>{t.numero}</div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{t.cliente_nombre}</div>
+                        <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {an ? nm(t.modelo_codigo) + " · anulado por " + titulo(t.anulado_por_nombre)
+                            : [nm(t.modelo_codigo), t.piezas, titulo(t.atendido_por_nombre), t.segundos_servicio != null ? fmtMMSS(t.segundos_servicio * 1000) : null].filter(Boolean).join(" · ")}
+                          {" · registró " + titulo(t.registrado_por_nombre) + " · " + fmtHora(t.terminado_at)}
+                        </div>
+                      </div>
+                    </div>
+                    <span style={S.pill(an ? C.redSoft : t.resultado === "Reparado" ? C.greenSoft : C.soft2, an ? C.redDark : t.resultado === "Reparado" ? C.greenDark : C.ink2)}>{an ? "Anulado" : t.resultado}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {buscar && (
+        <Modal titulo="Expediente del cliente" onClose={() => { setBuscar(false); setQ(""); }}>
+          <BuscadorExpediente q={q} setQ={setQ} autoFocus />
+          <Expediente q={q} />
+        </Modal>
+      )}
+    </div>
+  );
+}
