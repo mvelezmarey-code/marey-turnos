@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
 import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA } from "./lib.js";
 import { Header, Leaderboard, Expediente, BuscadorExpediente, Modal } from "./components.jsx";
@@ -16,6 +16,62 @@ const desdeFiltro = (k) => {
   return d.toISOString();
 };
 const MAX_FILA = 4;
+const norm = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+// Campo que se puede escribir o escoger de la lista (pueblo, modelo)
+function Combo({ items, valueId, onPick, placeholder = "Escribe o escoge", label }) {
+  const elegido = items.find((m) => String(m.id) === String(valueId));
+  const [texto, setTexto] = useState(elegido ? elegido.nombre : "");
+  const [abierto, setAbierto] = useState(false);
+  const [idx, setIdx] = useState(0);
+  const tecleando = useRef(false);
+  // Si el valor cambia desde afuera (historial de llamadas, limpiar formulario), el texto lo sigue
+  useEffect(() => {
+    if (elegido) setTexto(elegido.nombre);
+    else if (!tecleando.current) setTexto("");
+    tecleando.current = false;
+  }, [valueId, items.length]); // eslint-disable-line
+  const q = norm(texto);
+  const lista = (q
+    ? items.filter((m) => norm(m.nombre).includes(q)).sort((a, b) => (norm(b.nombre).startsWith(q) ? 1 : 0) - (norm(a.nombre).startsWith(q) ? 1 : 0))
+    : items).slice(0, 8);
+  const escoger = (m) => { setTexto(m.nombre); setAbierto(false); onPick(String(m.id)); };
+  const escribir = (v) => {
+    tecleando.current = true;
+    setTexto(v); setAbierto(true); setIdx(0);
+    const exacto = items.find((m) => norm(m.nombre) === norm(v));
+    onPick(exacto ? String(exacto.id) : "");
+  };
+  const teclas = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setAbierto(true); setIdx((i) => Math.min(i + 1, lista.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setIdx((i) => Math.max(i - 1, 0)); }
+    else if ((e.key === "Enter" || e.key === "Tab") && abierto && texto.trim() && lista[idx]) { if (e.key === "Enter") e.preventDefault(); escoger(lista[idx]); }
+    else if (e.key === "Escape") setAbierto(false);
+  };
+  const malo = texto.trim() && !valueId && !abierto;
+  const caja = { position: "absolute", top: 50, left: 0, right: 0, zIndex: 20, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, boxShadow: "0 18px 36px -14px rgba(28,25,23,0.3)", textTransform: "none", letterSpacing: 0 };
+  return (
+    <div style={{ position: "relative" }}>
+      <input value={texto} onChange={(e) => escribir(e.target.value)} onFocus={(e) => { setAbierto(true); e.target.select(); }} onBlur={() => setTimeout(() => setAbierto(false), 150)} onKeyDown={teclas}
+        placeholder={placeholder} autoComplete="off" role="combobox" aria-expanded={abierto} aria-label={label}
+        style={{ ...S.input, paddingRight: 36, ...(malo ? { borderColor: "#F3C4C4", background: C.redSoft } : {}) }} />
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.faint} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: "absolute", right: 14, top: 16, pointerEvents: "none" }}><path d="m6 9 6 6 6-6" /></svg>
+      {abierto && lista.length > 0 && (
+        <div role="listbox" style={{ ...caja, padding: 4, maxHeight: 290, overflowY: "auto" }}>
+          {lista.map((m, i) => {
+            const on = String(m.id) === String(valueId);
+            return (
+              <button key={m.id} type="button" role="option" aria-selected={on} onMouseDown={(e) => { e.preventDefault(); escoger(m); }} onMouseEnter={() => setIdx(i)}
+                style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", borderRadius: 8, border: "none", fontSize: 15, fontWeight: on ? 700 : 500, color: C.ink, background: i === idx ? C.orangeSoft : "transparent" }}>{m.nombre}</button>
+            );
+          })}
+        </div>
+      )}
+      {abierto && q && lista.length === 0 && <div style={{ ...caja, padding: "10px 14px", fontSize: 13, color: C.faint, fontWeight: 500 }}>No hay ninguno con ese nombre</div>}
+      {malo && <div style={{ fontSize: 12, color: C.redDark, fontWeight: 600, textTransform: "none", letterSpacing: 0, marginTop: 4 }}>Escoge uno de la lista</div>}
+    </div>
+  );
+}
 
 export default function Recepcion() {
   const { empleados, modelos } = useCatalogos();
@@ -24,6 +80,7 @@ export default function Recepcion() {
   const visitas = useVisitasVenta();
   const now = useNow();
   const nm = (c) => (modelos.find((m) => m.codigo === c) || {}).nombre || c;
+  const modelosCombo = useMemo(() => modelos.map((m) => ({ id: m.codigo, nombre: m.nombre })), [modelos]);
 
   const registradores = useMemo(() => empleados.filter((e) => e.orden_registro != null).sort((a, b) => a.orden_registro - b.orden_registro), [empleados]);
   const [regId, setRegId] = useState(null);
@@ -53,7 +110,7 @@ export default function Recepcion() {
   const cargarLista = () => llamadasDesde(desdeFiltro(filtro)).then((d) => setLista(d || [])).catch(() => setLista([]));
   useEffect(() => { if (bit === "llamadas") cargarLista(); }, [bit, filtro]); // eslint-disable-line
 
-  // Pueblo: un solo dropdown (lista de MareyApp) para Reparación y Llamada
+  // Pueblo: un solo campo (lista de MareyApp) para Reparación y Llamada
   const escogerPueblo = (id) => {
     const m = cat.municipios.find((x) => String(x.id) === String(id));
     setFl((p) => ({ ...p, municipio_id: id }));
@@ -214,12 +271,9 @@ export default function Recepcion() {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
             <label style={S.label}>Teléfono<input type="tel" value={f.telefono} onChange={set("telefono")} placeholder="787-000-0000" style={S.input} /></label>
-            <label style={S.label}>Pueblo
-              <select value={fl.municipio_id} onChange={(e) => escogerPueblo(e.target.value)} style={S.select}>
-                <option value="">Escoge</option>
-                {cat.municipios.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
-              </select>
-            </label>
+            <div style={S.label}>Pueblo
+              <Combo items={cat.municipios} valueId={fl.municipio_id} onPick={escogerPueblo} label="Pueblo" />
+            </div>
           </div>
           <label style={S.label}>Nombre<input value={f.nombre} onChange={set("nombre")} style={S.input} /></label>
 
@@ -249,12 +303,9 @@ export default function Recepcion() {
           {tipo === "llamada" ? (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-                <label style={S.label}>Modelo
-                  <select value={fl.modelo_id} onChange={(e) => setFl({ ...fl, modelo_id: e.target.value })} style={S.select}>
-                    <option value="">Escoge</option>
-                    {cat.modelos.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
-                  </select>
-                </label>
+                <div style={S.label}>Modelo
+                  <Combo items={cat.modelos} valueId={fl.modelo_id} onPick={(id) => setFl((p) => ({ ...p, modelo_id: id }))} label="Modelo" />
+                </div>
                 <label style={S.label}>Hace cuánto la tiene
                   <select value={fl.antiguedad_id} onChange={(e) => setFl({ ...fl, antiguedad_id: e.target.value })} style={S.select}>
                     <option value="">Escoge</option>
@@ -278,12 +329,9 @@ export default function Recepcion() {
           ) : (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-                <label style={S.label}>Modelo
-                  <select value={f.modelo} onChange={set("modelo")} style={S.select}>
-                    <option value="">Escoge</option>
-                    {modelos.map((m) => <option key={m.codigo} value={m.codigo}>{m.nombre}</option>)}
-                  </select>
-                </label>
+                <div style={S.label}>Modelo
+                  <Combo items={modelosCombo} valueId={f.modelo} onPick={(id) => setF((p) => ({ ...p, modelo: id }))} label="Modelo" />
+                </div>
                 <label style={S.label}>
                   <span style={{ display: "flex", justifyContent: "space-between" }}><span>Serie</span><span style={{ color: f.serial.length === 11 ? C.green : C.faint }}>{f.serial.length}/11</span></span>
                   <input inputMode="numeric" maxLength={11} value={f.serial} onChange={(e) => setF({ ...f, serial: soloDigitos(e.target.value).slice(0, 11) })}
