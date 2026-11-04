@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
-import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA } from "./lib.js";
+import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA, SALIDAS, RAZONES_NINGUNO } from "./lib.js";
 import { Header, Leaderboard, Expediente, BuscadorExpediente, Modal } from "./components.jsx";
 import { catalogoLlamadas, llamadasPorTelefono, llamadasDesde, registrarLlamada, estadoLlamada, esCitado, RESULTADOS_LLAMADA, MORADO } from "./llamadas.js";
 
@@ -97,6 +97,11 @@ export default function Recepcion() {
   const [anularId, setAnularId] = useState(null);
   const [verHist, setVerHist] = useState(true);
   const [ventaMsg, setVentaMsg] = useState(null);
+  // Decisión de Anthony: con qué se fue el cliente que no quiso reparar
+  const [elegida, setElegida] = useState(null);
+  const [razon, setRazon] = useState(null);
+  const [otro, setOtro] = useState("");
+  const [decMsg, setDecMsg] = useState(null);
 
   // ---------- Llamadas (base de MareyApp) ----------
   const [cat, setCat] = useState({ municipios: [], modelos: [], antiguedad: [], usuarios: [] });
@@ -110,7 +115,7 @@ export default function Recepcion() {
   const cargarLista = () => llamadasDesde(desdeFiltro(filtro)).then((d) => setLista(d || [])).catch(() => setLista([]));
   useEffect(() => { if (bit === "llamadas") cargarLista(); }, [bit, filtro]); // eslint-disable-line
 
-  // Pueblo: un solo campo (lista de MareyApp) para Reparación y Llamada
+  // Pueblo: un solo dropdown (lista de MareyApp) para Reparación y Llamada
   const escogerPueblo = (id) => {
     const m = cat.municipios.find((x) => String(x.id) === String(id));
     setFl((p) => ({ ...p, municipio_id: id }));
@@ -152,7 +157,10 @@ export default function Recepcion() {
     });
   }, [tel, cat]); // eslint-disable-line
 
-  const fila = abiertos.filter((t) => t.tipo === "ventanilla");
+  const fila = abiertos.filter((t) => t.tipo === "ventanilla" && (t.status === "espera" || t.status === "en_proceso"));
+  const pendientes = abiertos.filter((t) => t.tipo === "ventanilla" && t.status === "decision");
+  const dec = pendientes[0] || null;
+  const maxFila = dec ? 3 : MAX_FILA; // con la tarjeta de decisión se enseñan 3 para que la pantalla no haga scroll
   const espera = fila.filter((t) => t.status === "espera").length;
   const arreglando = fila.filter((t) => t.status === "en_proceso").length;
   const bitacora = hoy.filter((t) => t.tipo === "ventanilla");
@@ -228,6 +236,24 @@ export default function Recepcion() {
     try { const n = await rpc("deshacer_visita_venta", { p_empleado: regId }); visitas.setN(n); setVentaMsg({ ok: true, t: "Se quitó el último" }); }
     catch (e) { setVentaMsg({ ok: false, t: e.message }); }
   };
+  useEffect(() => { setElegida(null); setRazon(null); setOtro(""); }, [dec && dec.id]);
+  useEffect(() => { if (!decMsg) return; const t = setTimeout(() => setDecMsg(null), 5000); return () => clearTimeout(t); }, [decMsg]);
+  const razonFinal = razon === "Otro" ? otro.trim() : razon;
+  const listaDec = elegida && (elegida !== "Ninguno" || (razon && (razon !== "Otro" || otro.trim().length >= 3)));
+  const decidir = async (salida) => {
+    if (!dec || busy) return;
+    const s = salida || elegida;
+    if (s === "Ninguno" && !listaDec) return;
+    setBusy(true);
+    try {
+      await rpc("decidir_salida", { p_turno: dec.id, p_empleado: regId, p_salida: s, p_razon: s === "Ninguno" ? razonFinal : null });
+      setDecMsg({ ok: true, t: `${dec.cliente_nombre} · se fue con: ${s}${s === "Ninguno" ? " · " + razonFinal : ""}` });
+      recargar();
+    } catch (e) { setDecMsg({ ok: false, t: e.message }); }
+    setBusy(false);
+  };
+  const pickSalida = (n) => { if (n === "Ninguno") { setElegida("Ninguno"); setRazon(null); setOtro(""); } else decidir(n); };
+
   useEffect(() => { if (!ventaMsg) return; const t = setTimeout(() => setVentaMsg(null), 4000); return () => clearTimeout(t); }, [ventaMsg]);
 
   const hint = !ok ? `Falta: ${faltan.join(", ")}`
@@ -357,7 +383,7 @@ export default function Recepcion() {
         <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12, flex: "none" }}>
             {kpi("Clientes en espera", espera, C.orangeDark)}
-            {kpi("Arreglando", arreglando, C.ink)}
+            {kpi("Reparando", arreglando, C.ink)}
             {kpi("Cerrados hoy", cerrados, C.green)}
             {kpi("Clientes de venta", visitas.n, C.blueDark,
               <button type="button" onClick={sumarVenta} title="Toca una vez por cada cliente que vino a comprar o preguntar"
@@ -370,14 +396,58 @@ export default function Recepcion() {
             </div>
           )}
 
+          {dec && (
+            <div style={{ flex: "none", background: C.orangeSoft, border: `2px solid ${C.orange}`, borderRadius: 16, boxShadow: "0 14px 30px -18px rgba(180,83,9,0.55)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+                  <div style={{ ...S.cap, color: C.orangeDark, display: "flex", alignItems: "center", gap: 8 }}><span style={S.dot(C.orange)} />Decisión pendiente · {regNombre || "recepción"}{pendientes.length > 1 ? ` · ${pendientes.length} esperando` : ""}</div>
+                  <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{dec.cliente_nombre} no quiso reparar {dec.piezas ? dec.piezas.split(", ").map((n) => (/a$/i.test(n.split(" ")[0]) ? "la " : "el ") + n.toLowerCase()).join(" y ") : "el calentador"}</div>
+                  <div style={{ fontSize: 13, color: C.faint }}>{dec.numero} · {nm(dec.modelo_codigo)} · lo revisó {titulo(dec.atendido_por_nombre)} · hace {Math.max(0, Math.floor((now - new Date(dec.terminado_at)) / 60000))} min</div>
+                </div>
+                <div style={{ flex: "none", fontSize: 14, fontWeight: 700, color: C.orangeDark, paddingTop: 2 }}>¿Con qué se fue el cliente?</div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+                {SALIDAS.map((x) => (
+                  <button key={x.n} type="button" disabled={busy || !regId} onClick={() => pickSalida(x.n)}
+                    style={{ height: 52, borderRadius: 12, fontSize: 16, fontWeight: 700, color: C.ink, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, background: "#fff",
+                      border: elegida === x.n ? `2px solid ${C.orange}` : "1px solid #E7C9A0", boxShadow: elegida === x.n ? "0 6px 14px -10px rgba(180,83,9,0.6)" : "none" }}>
+                    {x.n}<span style={{ fontSize: 12, fontWeight: 500, color: C.faint }}>{x.d}</span>
+                  </button>
+                ))}
+              </div>
+              {elegida === "Ninguno" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 10, borderTop: "1px solid #F1DFC6" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.orangeDark }}>¿Por qué no se llevó ninguno?</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                    {RAZONES_NINGUNO.map((r) => (
+                      <button key={r} type="button" onClick={() => { setRazon(r); setOtro(""); }}
+                        style={{ height: 38, padding: "0 14px", borderRadius: 19, fontSize: 14, ...(razon === r ? { border: `1px solid ${C.ink}`, background: C.ink, color: "#fff", fontWeight: 700 } : { border: "1px solid #E7C9A0", background: "#fff", color: C.ink2, fontWeight: 500 }) }}>{r}</button>
+                    ))}
+                    <button type="button" disabled={!listaDec || busy} onClick={() => decidir("Ninguno")}
+                      style={{ marginLeft: "auto", height: 40, padding: "0 20px", borderRadius: 12, border: "none", fontSize: 15, fontWeight: 700, color: "#fff", background: listaDec ? C.green : C.gris }}>{busy ? "Guardando..." : "Guardar"}</button>
+                  </div>
+                  {razon === "Otro" && (
+                    <input autoFocus value={otro} onChange={(e) => setOtro(e.target.value)} onKeyDown={(e) => e.key === "Enter" && decidir("Ninguno")} placeholder="Escribe por qué no se llevó ninguno"
+                      style={{ ...S.input, height: 44, background: "#fff", border: `2px solid ${C.orange}` }} />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {decMsg && (
+            <div style={{ flex: "none", marginTop: -8, fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: decMsg.ok ? C.greenSoft : C.redSoft, color: decMsg.ok ? C.greenDark : C.redDark }}>
+              {decMsg.ok ? "Guardado: " : ""}{decMsg.t}
+            </div>
+          )}
+
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 16, flex: "none" }}>
             <div style={{ ...S.card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 700 }}><span style={S.dot(C.orange)} />Reparación</div>
-                <div style={{ fontSize: 12, color: C.faint }}>Clientes en espera · se arreglan en el iPad</div>
+                <div style={{ fontSize: 12, color: C.faint }}>Clientes en espera · se reparan en el iPad</div>
               </div>
               {fila.length === 0 && <div style={{ padding: "26px 18px", borderTop: `1px solid ${C.soft2}`, textAlign: "center", fontSize: 14, color: C.faint }}>No hay nadie en la lista.</div>}
-              {fila.slice(0, MAX_FILA).map((t) => {
+              {fila.slice(0, maxFila).map((t) => {
                 const proc = t.status === "en_proceso";
                 return (
                   <div key={t.id} style={{ borderTop: `1px solid ${C.soft2}` }}>
@@ -400,7 +470,7 @@ export default function Recepcion() {
                   </div>
                 );
               })}
-              {fila.length > MAX_FILA && <div style={{ padding: "10px 18px", borderTop: `1px solid ${C.soft2}`, fontSize: 13, fontWeight: 600, color: C.orangeDark }}>+ {fila.length - MAX_FILA} más en la lista</div>}
+              {fila.length > maxFila && <div style={{ padding: "10px 18px", borderTop: `1px solid ${C.soft2}`, fontSize: 13, fontWeight: 600, color: C.orangeDark }}>+ {fila.length - maxFila} más en la lista</div>}
             </div>
             <Leaderboard titulo="Registros de hoy" rows={lbReg} campo="registros" unidad="registros" max={4} />
           </div>
@@ -449,12 +519,13 @@ export default function Recepcion() {
                         <div style={{ fontSize: 14, fontWeight: 600 }}>{t.cliente_nombre}</div>
                         <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {an ? nm(t.modelo_codigo) + " · anulado por " + titulo(t.anulado_por_nombre)
-                            : [nm(t.modelo_codigo), t.piezas, titulo(t.atendido_por_nombre), t.segundos_servicio != null ? fmtMMSS(t.segundos_servicio * 1000) : null].filter(Boolean).join(" · ")}
+                            : [nm(t.modelo_codigo), t.piezas, titulo(t.atendido_por_nombre), t.segundos_servicio != null ? fmtMMSS(t.segundos_servicio * 1000) : null,
+                                t.salida ? "se fue con: " + t.salida + (t.razon_salida ? " (" + t.razon_salida + ")" : "") + (t.decidido_por_nombre ? " · decidió " + titulo(t.decidido_por_nombre) : "") : null].filter(Boolean).join(" · ")}
                           {" · registró " + titulo(t.registrado_por_nombre) + " · " + fmtHora(t.terminado_at)}
                         </div>
                       </div>
                     </div>
-                    <span style={S.pill(an ? C.redSoft : t.resultado === "Reparado" ? C.greenSoft : C.soft2, an ? C.redDark : t.resultado === "Reparado" ? C.greenDark : C.ink2)}>{an ? "Anulado" : t.resultado}</span>
+                    <span style={S.pill(an ? C.redSoft : t.resultado === "Reparado" ? C.greenSoft : t.resultado === "Cliente no quiso reparar" ? "#FAEEDA" : C.soft2, an ? C.redDark : t.resultado === "Reparado" ? C.greenDark : t.resultado === "Cliente no quiso reparar" ? "#854F0B" : C.ink2)}>{an ? "Anulado" : t.resultado === "Cliente no quiso reparar" ? "No quiso reparar" : t.resultado === "Sin pieza dañada, se orientó" ? "Orientación" : t.resultado}</span>
                   </div>
                 );
               })}
