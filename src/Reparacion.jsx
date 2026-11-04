@@ -1,8 +1,32 @@
-import React, { useMemo, useState } from "react";
-import { C, S, mono, fmtMMSS, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, RESULTADOS_VENTANILLA, DESC_RESULTADO, SIN_PIEZA } from "./lib.js";
-import { Header, Leaderboard, PinPad } from "./components.jsx";
+import React, { useEffect, useMemo, useState } from "react";
+import { C, S, mono, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, SIN_PIEZA, TZ } from "./lib.js";
+import { Leaderboard, PinPad } from "./components.jsx";
 
+const NO_QUISO = "Cliente no quiso reparar";
+const minDesde = (ts, now) => (ts ? Math.max(0, Math.floor((now - new Date(ts)) / 60000)) : 0);
 const MIN = (seg) => (seg == null ? "—" : Math.round(seg / 60) + " min");
+const ESPERA_LARGA = 15; // minutos: el tiempo sale en rojo
+const MAX_FILAS = 4;
+const CIERRE_SEG = 8; // la pantalla de "terminado" se cierra sola y la sesión se acaba
+const ANIMO = ["Vamos a empezar", "Vas bien, sigue así", "Ya casi terminas", "Todo listo, dale a Terminar"];
+const sombra = "0 18px 40px -28px rgba(28,25,23,0.28)";
+const card = { background: "#fff", border: `1px solid ${C.line}`, borderRadius: 20, boxShadow: sombra };
+const flecha = (d) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+
+// "Elemento superior" -> "el elemento superior"; "Válvula de alivio" -> "la válvula de alivio"
+const conArticulo = (n) => (/a$/i.test(n.split(" ")[0]) ? "la " : "el ") + n.charAt(0).toLowerCase() + n.slice(1);
+
+function TopBar() {
+  const now = useNow(15000);
+  const fecha = new Date(now).toLocaleDateString("es-PR", { timeZone: TZ, weekday: "long", day: "numeric", month: "long" });
+  const hora = new Date(now).toLocaleTimeString("es-PR", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+  return (
+    <div style={{ flex: "none", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 28px 0" }}>
+      <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 1.2, color: C.orange }}>REPARACIÓN VENTANILLA</div>
+      <div style={{ fontSize: 15, fontWeight: 600, color: C.ink2 }}>{titulo(fecha)} · <span style={{ fontFamily: mono }}>{hora}</span></div>
+    </div>
+  );
+}
 
 export default function Reparacion() {
   const { empleados, modelos, piezas, causas, cargarPiezas, cargarCausas } = useCatalogos();
@@ -12,12 +36,12 @@ export default function Reparacion() {
   const nm = (c) => (modelos.find((m) => m.codigo === c) || {}).nombre || c;
 
   const tecnicos = useMemo(() => empleados.filter((e) => (e.roles || []).includes("reparacion")), [empleados]);
-  const lista = abiertos.filter((t) => t.tipo === "ventanilla");
+  const lista = abiertos.filter((t) => t.tipo === "ventanilla" && (t.status === "espera" || t.status === "en_proceso"));
   const enEspera = lista.filter((t) => t.status === "espera");
+  const reparando = lista.filter((t) => t.status === "en_proceso");
   const primero = enEspera[0];
-
-  // Promedios de hoy (servicio y espera) de los turnos terminados
   const term = hoy.filter((t) => t.tipo === "ventanilla" && t.status === "terminado");
+  const terminadosHoy = term.length + abiertos.filter((t) => t.tipo === "ventanilla" && t.status === "decision").length;
   const prom = (k) => { const v = term.map((t) => t[k]).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
 
   const [screen, setScreen] = useState("list"); // list | pin | work | done
@@ -31,25 +55,39 @@ export default function Reparacion() {
   const [res, setRes] = useState(null);
   const [causa, setCausa] = useState(null);
   const [done, setDone] = useState(null);
+  const [cuenta, setCuenta] = useState(CIERRE_SEG);
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const [pop, setPop] = useState(null); // cliente | llamada
   const [confirmAnular, setConfirmAnular] = useState(false);
-  // "+ Otra pieza" / "+ Otra causa": se añaden a la lista sin repetir
   const [nuevaPieza, setNuevaPieza] = useState(null); // null = cerrado, "" = abierto
   const [nuevaCausa, setNuevaCausa] = useState(null);
   const [addMsg, setAddMsg] = useState("");
 
   const turno = abiertos.find((t) => t.id === turnoId) || null;
+  const turnoPin = turno || lista.find((t) => t.id === turnoId) || null;
   const modelo = turno ? modelos.find((m) => m.codigo === turno.modelo_codigo) : null;
   const sinCat = modelo ? !modelo.tiene_catalogo : false;
   const opciones = turno ? piezas.filter((p) => p.modelo_codigo === turno.modelo_codigo) : [];
   const ninguna = opciones.find((p) => p.es_ninguna);
+  const reales = opciones.filter((p) => !p.es_ninguna);
   const tieneNinguna = !!(ninguna && sel.includes(ninguna.id));
   const siguiente = enEspera.find((t) => t.id !== turnoId);
+  const posFila = (t) => enEspera.findIndex((x) => x.id === t.id) + 1;
 
-  const limpiarTrabajo = () => { setStep(1); setSel([]); setRes(null); setCausa(null); setErr(""); setPop(null); setConfirmAnular(false); setNuevaPieza(null); setNuevaCausa(null); setAddMsg(""); };
+  const limpiarTrabajo = () => { setStep(1); setSel([]); setRes(null); setCausa(null); setErr(""); setPop(null); setConfirmAnular(false); setNuevaPieza(null); setNuevaCausa(null); setAddMsg(""); setBusy(false); };
   const abrirPin = (t, modo) => { setTurnoId(t.id); setModoPin(modo); setEmp(modo === "continuar" ? tecnicos.find((x) => x.id === t.atendido_por) || null : null); setPin(""); setPinMsg(""); setScreen("pin"); };
-  const volver = () => { setScreen("list"); setTurnoId(null); setEmp(null); setPin(""); limpiarTrabajo(); };
+  // Cerrar sesión: vuelve a la lista y se olvida del técnico (el próximo tiene que poner su PIN)
+  const volver = () => { setScreen("list"); setTurnoId(null); setEmp(null); setPin(""); setDone(null); limpiarTrabajo(); };
+
+  // La pantalla de terminado se cierra sola
+  useEffect(() => {
+    if (screen !== "done") return;
+    setCuenta(CIERRE_SEG);
+    const iv = setInterval(() => setCuenta((c) => c - 1), 1000);
+    return () => clearInterval(iv);
+  }, [screen]);
+  useEffect(() => { if (screen === "done" && cuenta <= 0) volver(); }, [cuenta, screen]); // eslint-disable-line
 
   const confirmarPin = async () => {
     if (!emp) return setPinMsg("Primero escoge tu nombre");
@@ -62,17 +100,16 @@ export default function Reparacion() {
     } catch (e) { setPinMsg(e.message); }
   };
 
-  // ---------- Reglas de pieza y resultado (iguales a la base de datos) ----------
-  const validRes = (r) => sinCat || (sel.length > 0 && !(r === "Reparado" && tieneNinguna) && !(r === SIN_PIEZA && !tieneNinguna));
+  // ---------- Paso 1: piezas ----------
   const toggle = (p) => {
     let next;
     if (p.es_ninguna) next = sel.includes(p.id) ? [] : [p.id];
     else next = sel.includes(p.id) ? sel.filter((x) => x !== p.id) : sel.filter((x) => x !== (ninguna && ninguna.id)).concat(p.id);
     const nN = !!(ninguna && next.includes(ninguna.id));
-    const keep = res && next.length && !(res === "Reparado" && nN) && !(res === SIN_PIEZA && !nN);
-    setSel(next); setRes(keep ? res : null);
+    // Ninguna = orientación automática; si la quita, se borra
+    setSel(next);
+    setRes(nN ? SIN_PIEZA : res === SIN_PIEZA ? null : res);
   };
-
   const agregarPieza = async () => {
     try {
       const rows = await rpc("agregar_pieza", { p_modelo: turno.modelo_codigo, p_nombre: nuevaPieza, p_empleado: emp.id });
@@ -97,317 +134,409 @@ export default function Reparacion() {
     } catch (e) { setAddMsg(e.message); }
   };
 
-  const nombresSel = opciones.filter((p) => sel.includes(p.id)).map((p) => p.nombre).join(", ");
+  // ---------- Paso 2: pregunta armada con la pieza ----------
+  const selReales = reales.filter((p) => sel.includes(p.id)).map((p) => p.nombre);
+  const nombresSel = tieneNinguna ? "Ninguna" : selReales.join(", ");
+  const frases = selReales.map(conArticulo);
+  const plural = frases.length > 1;
+  const femSola = frases.length === 1 && frases[0].startsWith("la ");
+  const lo = plural ? "los" : femSola ? "la" : "lo";
+  const piezaFrase = frases.length > 1 ? frases.slice(0, -1).join(", ") + " y " + frases[frases.length - 1] : frases[0] || "el calentador";
+  const opcionesRes = sinCat
+    ? [["Reparado", "Sí", "El cliente lo quiere reparar"], [NO_QUISO, "No", "El cliente no lo quiere reparar"], [SIN_PIEZA, "Le orienté", "No había nada roto: le expliqué al cliente"]]
+    : [["Reparado", "Sí", `El cliente ${lo} quiere reparar`], [NO_QUISO, "No", `El cliente no ${lo} quiere reparar`]];
+
+  const noQuiso = res === NO_QUISO;
+  const orientacion = tieneNinguna || (sinCat && res === SIN_PIEZA);
+  const p1ok = sinCat || sel.length > 0;
   const pasos = [
-    { label: "Pieza dañada", val: sinCat ? "No lleva piezas" : sel.length ? nombresSel : "Falta", ok: sinCat || sel.length > 0 },
-    { label: "Resultado", val: res || "Falta", ok: !!res },
-    { label: "Causa", val: causa || "Falta", ok: !!causa },
+    { label: "Pieza dañada", val: sinCat ? "No lleva piezas" : sel.length ? nombresSel : "Falta", ok: p1ok },
+    { label: "Resultado", val: tieneNinguna ? "Orientación (automático)" : res === "Reparado" ? "Sí, lo quiere reparar" : res === NO_QUISO ? "No quiso reparar" : res === SIN_PIEZA ? "Le orienté" : "Falta", ok: !!res },
+    noQuiso ? { label: "Anthony decide", val: "Le toca a recepción", ok: true } : { label: "Causa", val: causa || "Falta", ok: !!causa },
   ];
-  const listo = pasos.every((p) => p.ok);
-  const faltan = pasos.filter((p) => !p.ok).map((p) => p.label.toLowerCase());
+  const listo = p1ok && !!res && (noQuiso || !!causa);
+  const hechos = pasos.filter((p) => p.ok).length;
 
   const terminar = async () => {
-    if (!listo) return;
+    if (!listo || busy) return;
+    setBusy(true); setErr("");
     try {
-      await rpc("terminar_turno", { p_turno: turnoId, p_empleado: emp.id, p_resultado: res, p_piezas: sinCat ? [] : sel, p_causa: causa });
-      setDone({ numero: turno.numero, txt: [turno.cliente_nombre, nm(turno.modelo_codigo), nombresSel, res, "Causa: " + causa, fmtMMSS(now - new Date(turno.iniciado_at)) + " en servicio", titulo(emp.nombre)].filter(Boolean).join(" · ") });
+      await rpc("terminar_turno", { p_turno: turnoId, p_empleado: emp.id, p_resultado: res, p_piezas: sinCat ? [] : sel, p_causa: noQuiso ? null : causa });
+      const mins = minDesde(turno.iniciado_at, now);
+      setDone({
+        numero: turno.numero, anthony: noQuiso,
+        txt: [turno.cliente_nombre, nm(turno.modelo_codigo), nombresSel || null, noQuiso ? "Anthony pone con qué se fue" : "Causa: " + causa, mins + " min reparando", titulo(emp.nombre)].filter(Boolean).join(" · "),
+      });
       setScreen("done"); recargar();
     } catch (e) { setErr(e.message); }
+    setBusy(false);
   };
   const devolver = async () => { try { await rpc("devolver_turno", { p_turno: turnoId, p_empleado: emp.id }); recargar(); volver(); } catch (e) { setErr(e.message); } };
   const anular = async () => { try { await rpc("anular_turno", { p_turno: turnoId, p_empleado: emp.id, p_motivo: "Cliente se fue" }); recargar(); volver(); } catch (e) { setErr(e.message); } };
 
-  const chipTop = (on, c, bg) => ({ height: 40, padding: "0 16px", borderRadius: 20, fontSize: 14, fontWeight: 700, border: `1px solid ${on ? c : C.line2}`, background: on ? c : bg, color: on ? "#fff" : c, flex: "none" });
-  // Título del paso + botón "Siguiente" al lado (gris hasta que se escoge algo, verde cuando está listo)
-  const pasoTitulo = (n, t, sub) => {
-    const okPaso = n < 3 && pasos[n - 1].ok;
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flex: "none" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-          <div style={{ ...S.cap, color: C.orange, letterSpacing: 0.8 }}>Paso {n} de 3</div>
-          <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.3 }}>{t}</div>
-          <div style={{ fontSize: 15, color: C.faint }}>{sub}</div>
-        </div>
-        {n < 3 && (
-          <button type="button" disabled={!okPaso} onClick={() => { setStep(n + 1); setAddMsg(""); }}
-            style={{ ...S.btn(okPaso ? C.green : C.gris), flex: "none", height: 52, padding: "0 18px 0 24px", fontSize: 17, display: "flex", alignItems: "center", gap: 6 }}>
-            Siguiente
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
-          </button>
-        )}
-      </div>
-    );
+  // ---------- Barra de abajo: Atrás + Siguiente ----------
+  const okPaso = step === 1 ? p1ok : step === 2 ? !!res : listo;
+  const atras = () => { if (step === 3 && tieneNinguna) setStep(1); else if (step > 1) setStep(step - 1); setAddMsg(""); };
+  const avanzar = () => {
+    if (!okPaso) return;
+    setAddMsg("");
+    if (step === 1) setStep(tieneNinguna ? 3 : 2);
+    else if (step === 2) { if (noQuiso) terminar(); else setStep(3); }
+    else terminar();
   };
+  const avanzarTxt = busy ? "Guardando..."
+    : step === 1 ? (p1ok ? (tieneNinguna ? "Siguiente: la causa (es orientación)" : "Siguiente: ¿lo quiere reparar?") : "Toca una pieza para seguir")
+    : step === 2 ? (res ? (noQuiso ? "Enviar a Anthony" : "Siguiente: la causa") : "Toca una opción para seguir")
+    : listo ? "Terminar turno" : "Toca una causa para terminar";
+  const pregunta = step === 1 ? "¿Qué pieza estaba dañada?"
+    : step === 2 ? (!p1ok ? "Primero marca la pieza dañada" : sinCat ? "¿El cliente quiere reparar el calentador?" : `¿El cliente quiere reparar ${piezaFrase}?`)
+    : orientacion ? "¿Por qué vino el cliente?" : "¿Qué causó el problema?";
+  const ayuda = step === 1 ? (sinCat ? `El ${nm(turno && turno.modelo_codigo)} no lleva catálogo de piezas. Sigue al próximo paso.` : "Toca la pieza dañada. Puedes marcar más de una.")
+    : step === 2 ? "Toca Sí o No."
+    : orientacion ? "Nada estaba dañado, es orientación. Toca la causa de lo que le pasaba." : "Toca una sola causa.";
+
+  const opcion = (on) => on
+    ? { border: `2px solid ${C.orange}`, background: C.orangeSoft, color: C.orangeDark, fontWeight: 700, boxShadow: "0 6px 14px -10px rgba(180,83,9,0.6)" }
+    : { border: `1px solid ${C.line2}`, background: "#fff", color: C.ink, fontWeight: 500 };
+  const radio = (on) => ({ flex: "none", width: 28, height: 28, borderRadius: "50%", boxSizing: "border-box", ...(on ? { border: `9px solid ${C.orange}`, background: "#fff" } : { border: "2px solid #A8A29E" }) });
+  const chipTop = (on, c, bg) => ({ height: 40, padding: "0 16px", borderRadius: 20, fontSize: 14, fontWeight: 700, border: `1px solid ${on ? c : C.line2}`, background: on ? c : bg, color: on ? "#fff" : c, flex: "none" });
   const inputNuevo = (valor, setValor, onAdd, ph, color) => (
-    <div style={{ display: "flex", gap: 8 }}>
-      <input autoFocus value={valor} onChange={(e) => setValor(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onAdd()} placeholder={ph} style={{ ...S.input, flex: 1 }} />
-      <button type="button" onClick={onAdd} style={{ ...S.btn(valor.trim().length >= 3 ? color : C.gris), height: 46 }}>Añadir</button>
-      <button type="button" onClick={() => setValor(null)} style={{ ...S.ghost, height: 46 }}>Cancelar</button>
+    <div style={{ display: "flex", gap: 8, flex: "none" }}>
+      <input autoFocus value={valor} onChange={(e) => setValor(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onAdd()} placeholder={ph} style={{ ...S.input, height: 54, fontSize: 17, flex: 1 }} />
+      <button type="button" onClick={onAdd} style={{ ...S.btn(valor.trim().length >= 3 ? color : C.gris), height: 54 }}>Añadir</button>
+      <button type="button" onClick={() => setValor(null)} style={{ ...S.ghost, height: 54 }}>Cancelar</button>
+    </div>
+  );
+
+  // ---------- Lista de espera (también se ve borrosa detrás del PIN) ----------
+  const filas = lista.slice(0, MAX_FILAS);
+  const grid = { display: "grid", gridTemplateColumns: "96px minmax(0, 1fr) 150px 140px", gap: 20, alignItems: "center" };
+  const tile = (label, n, color, fuerte) => (
+    <div style={{ height: 96, boxSizing: "border-box", borderRadius: 20, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between",
+      ...(fuerte ? { background: C.orange, color: "#fff", boxShadow: "0 18px 34px -20px rgba(180,83,9,0.85)" } : { background: "#fff", border: `1px solid ${C.line}`, boxShadow: "0 18px 40px -30px rgba(28,25,23,0.3)" }) }}>
+      <div style={{ fontSize: 17, fontWeight: 700, lineHeight: 1.2, color: fuerte ? "#fff" : C.ink2, whiteSpace: "pre-line" }}>{label}</div>
+      <div style={{ fontFamily: mono, fontSize: 54, fontWeight: 600, lineHeight: 1, color: fuerte ? "#fff" : color }}>{n}</div>
+    </div>
+  );
+  const listaView = (
+    <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 20, padding: "16px 28px 26px" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
+        <div style={{ flex: "none", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 14 }}>
+          {tile("Clientes\nen espera", enEspera.length, "#fff", true)}
+          {tile("Reparando\nahora", reparando.length, C.orangeDark)}
+          {tile("Terminados\nhoy", terminadosHoy, C.green)}
+        </div>
+        <div style={{ ...card, flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ ...grid, flex: "none", padding: "14px 22px 10px", fontSize: 11, fontWeight: 700, color: "#A8A29E", textTransform: "uppercase", letterSpacing: 0.8 }}>
+            <span style={{ textAlign: "center" }}>Fila</span><span>Cliente</span><span>Tiempo de espera</span><span />
+          </div>
+          {lista.length === 0 && (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, borderTop: `1px solid ${C.soft2}` }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: C.ink2 }}>No hay clientes en espera</div>
+              <div style={{ fontSize: 15, color: C.faint }}>Cuando recepción cree un turno, aparece aquí.</div>
+            </div>
+          )}
+          {filas.map((t) => {
+            const proc = t.status === "en_proceso";
+            const next = primero && t.id === primero.id;
+            const mins = minDesde(proc ? t.iniciado_at : t.created_at, now);
+            const largo = !proc && mins >= ESPERA_LARGA;
+            return (
+              <div key={t.id} style={{ ...grid, flex: 1, minHeight: 0, maxHeight: 112, padding: "0 22px", borderTop: `1px solid ${C.soft2}`, ...(next ? { background: "linear-gradient(90deg, #FFF7EB, #FFFFFF 70%)", boxShadow: `inset 4px 0 0 ${C.orange}` } : {}) }}>
+                <div style={{ height: 64, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center",
+                  ...(proc ? { background: C.soft2, color: C.muted } : next ? { background: C.orange, color: "#fff", boxShadow: "0 10px 20px -12px rgba(180,83,9,0.8)" } : { background: C.soft, border: `1px solid ${C.line}`, color: C.ink2 }) }}>
+                  <span style={proc ? { fontSize: 13, fontWeight: 700, letterSpacing: 0.3 } : { fontFamily: mono, fontSize: 36, fontWeight: 600, lineHeight: 1 }}>{proc ? "Reparando" : posFila(t)}</span>
+                </div>
+                <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                    <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.cliente_nombre}</span>
+                    {t.nota && <span style={{ ...S.pill(C.moradoSoft, C.morado), fontWeight: 700 }}>Llamó antes</span>}
+                  </div>
+                  <div style={{ fontSize: 14, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {nm(t.modelo_codigo)} · {proc ? "con " + titulo(t.atendido_por_nombre) : "Serie " + t.serial}{t.lugar_compra ? " · " + t.lugar_compra : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <div style={{ fontFamily: mono, fontSize: 26, fontWeight: 600, letterSpacing: -0.5, lineHeight: 1, color: largo ? C.red : proc ? C.orangeDark : C.ink }}>{mins} min</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: next ? C.orange : "#A8A29E" }}>{proc ? "reparando" : next ? "esperando · le toca" : "esperando"}</div>
+                </div>
+                {proc
+                  ? <button type="button" onClick={() => abrirPin(t, "continuar")} style={{ height: 56, borderRadius: 14, fontSize: 17, fontWeight: 700, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2 }}>Continuar</button>
+                  : <button type="button" onClick={() => abrirPin(t, "iniciar")} style={{ height: 56, borderRadius: 14, fontSize: 17, fontWeight: 700, ...(next ? { border: "none", background: C.ink, color: "#fff", boxShadow: "0 10px 22px -12px rgba(28,25,23,0.7)" } : { border: `1px solid ${C.line2}`, background: "#fff", color: "#A8A29E" }) }}>Reparar</button>}
+              </div>
+            );
+          })}
+          <div style={{ marginTop: "auto", flex: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 22px", borderTop: `1px solid ${C.soft2}`, fontSize: 13, color: C.faint }}>
+            <span>El orden lo pone recepción · repara siempre el primero</span>
+            {lista.length > MAX_FILAS && <span style={{ fontWeight: 700, color: C.orangeDark }}>+ {lista.length - MAX_FILAS} más en la lista</span>}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <Leaderboard titulo="Reparaciones de hoy" rows={lbRep} campo="terminados" unidad="terminados" max={7} />
+        </div>
+        <div style={{ flex: "none", display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14 }}>
+          {[["Promedio", MIN(prom("segundos_servicio")), "por reparación", C.ink], ["Tiempo de espera", MIN(prom("segundos_espera")), "promedio de hoy", C.orangeDark]].map(([l, v, s, c]) => (
+            <div key={l} style={{ ...card, boxShadow: "0 18px 40px -30px rgba(28,25,23,0.3)", padding: "16px 18px" }}>
+              <div style={S.cap}>{l}</div>
+              <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.5, color: c }}>{v}</div>
+              <div style={{ fontSize: 12, color: C.faint }}>{s}</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.bg, overflow: "hidden" }}>
-      <Header subtitulo="iPad de reparación" />
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.bg, overflow: "hidden", position: "relative" }}>
+      {/* ---------- Lista + PIN encima (la lista se ve borrosa detrás) ---------- */}
+      {(screen === "list" || screen === "pin") && (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", transition: "filter 0.25s", ...(screen === "pin" ? { filter: "blur(6px)", pointerEvents: "none" } : {}) }} aria-hidden={screen === "pin"}>
+          <TopBar />
+          {listaView}
+        </div>
+      )}
 
-      {/* ---------- Lista de espera ---------- */}
-      {screen === "list" && (
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px", gap: 20, padding: "24px 28px" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flex: "none" }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
-                <span style={{ fontSize: 40, fontWeight: 700, letterSpacing: -0.8, lineHeight: 1.1 }}>Clientes en espera</span>
-                <span style={{ fontFamily: mono, fontSize: 40, fontWeight: 600, color: C.orange, lineHeight: 1.1 }}>{enEspera.length}</span>
+      {screen === "pin" && turnoPin && (
+        <div style={{ position: "absolute", inset: 0, zIndex: 10, background: "rgba(28,25,23,0.28)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div role="dialog" aria-label="Poner PIN" style={{ width: 880, maxWidth: "100%", background: "#fff", borderRadius: 24, boxShadow: "0 40px 80px -30px rgba(28,25,23,0.55)", display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px", overflow: "hidden" }}>
+            <div style={{ padding: "28px 30px", display: "flex", flexDirection: "column", gap: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                  <div style={{ ...S.cap, color: C.orange, letterSpacing: 0.8 }}>{modoPin === "iniciar" ? "Vas a reparar" : "Vas a continuar"}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                    <span style={{ flex: "none", fontSize: 15, fontWeight: 700, color: "#fff", background: C.orange, padding: "5px 12px", borderRadius: 10 }}>{modoPin === "iniciar" ? posFila(turnoPin) + "º en fila" : "Reparando"}</span>
+                    <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{turnoPin.cliente_nombre}</span>
+                  </div>
+                  <div style={{ fontSize: 15, color: C.faint }}>{nm(turnoPin.modelo_codigo)} · Serie <span style={{ fontFamily: mono, color: C.ink }}>{turnoPin.serial}</span> · esperando {minDesde(turnoPin.created_at, now)} min</div>
+                </div>
+                <button type="button" onClick={volver} aria-label="Cerrar" style={{ flex: "none", width: 44, height: 44, borderRadius: 22, border: `1px solid ${C.line2}`, background: "#fff", color: C.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button>
               </div>
-              <span style={{ height: 34, padding: "0 14px", borderRadius: 17, background: "#fff", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600 }}>
-                <span style={S.dot(C.orange)} />{lista.length - enEspera.length} arreglando
-              </span>
+              <div style={{ height: 1, background: C.soft2 }} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>¿Quién eres?</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+                  {tecnicos.map((e) => {
+                    const off = modoPin === "continuar" && e.id !== turnoPin.atendido_por;
+                    const on = emp && emp.id === e.id;
+                    return <button key={e.id} type="button" disabled={off} onClick={() => { setEmp(e); setPin(""); setPinMsg(""); }}
+                      style={{ height: 64, borderRadius: 12, fontSize: 17, ...opcion(on), fontWeight: on ? 700 : 600, opacity: off ? 0.35 : 1 }}>{e.nombre}</button>;
+                  })}
+                </div>
+              </div>
             </div>
-            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, paddingBottom: 4 }}>
-              {lista.length === 0 && (
-                <div style={{ ...S.card, flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 280, boxShadow: "none", borderStyle: "dashed" }}>
-                  <div style={{ fontSize: 26, fontWeight: 700, color: C.ink2 }}>No hay clientes en espera</div>
-                  <div style={{ fontSize: 15, color: C.faint }}>Cuando recepción cree un turno, aparece aquí.</div>
+            <div style={{ background: C.soft, borderLeft: `1px solid ${C.soft2}`, padding: "28px 24px", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>{emp ? "Hola, " + emp.nombre : "Escoge tu nombre"}</div>
+                <div style={{ fontSize: 13, color: C.faint, marginTop: 4 }}>{emp ? "Los mismos 3 dígitos que usas para ponchar" : "Toca tu nombre a la izquierda"}</div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.red, minHeight: 18 }}>{pinMsg}</div>
+              <PinPad pin={pin} setPin={(v) => { setPin(v); setPinMsg(""); }} onOk={confirmarPin} ready={emp && pin.length === 3} okLabel={modoPin === "iniciar" ? "Empezar a reparar" : "Continuar"} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Trabajando el turno ---------- */}
+      {screen === "work" && turno && (
+        <>
+          <TopBar />
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 16, padding: "16px 28px 24px" }}>
+            <div style={{ ...card, flex: "none", padding: "16px 22px", display: "flex", alignItems: "center", gap: 16, position: "relative" }}>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                  <span style={{ flex: "none", fontSize: 15, fontWeight: 700, color: C.orangeDark, background: C.orangeSoft, border: "1px solid #E7CBA9", padding: "4px 12px", borderRadius: 10 }}>Reparando</span>
+                  <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{turno.cliente_nombre}</span>
+                </div>
+                <div style={{ fontSize: 15, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nm(turno.modelo_codigo)} · Serie <span style={{ fontFamily: mono, color: C.ink }}>{turno.serial}</span>{turno.lugar_compra ? " · Compró en " + turno.lugar_compra : ""}</div>
+              </div>
+              {turno.nota && <button type="button" onClick={() => setPop(pop === "llamada" ? null : "llamada")} style={chipTop(pop === "llamada", C.morado, C.moradoSoft)}>Llamó antes</button>}
+              <button type="button" onClick={() => setPop(pop === "cliente" ? null : "cliente")} style={chipTop(pop === "cliente", C.ink2, "#fff")}>Datos del cliente</button>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", paddingLeft: 20, marginLeft: 4, borderLeft: `1px solid ${C.line}`, flex: "none" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#A8A29E", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Tiempo reparando</div>
+                <div style={{ fontFamily: mono, fontSize: 30, fontWeight: 600, lineHeight: 1, letterSpacing: -0.5 }}>{minDesde(turno.iniciado_at, now)} min</div>
+                <div style={{ fontSize: 12, color: C.faint, marginTop: 4 }}><b style={{ color: C.ink2 }}>{emp && emp.nombre}</b> · esperó {Math.round(((turno.iniciado_at ? new Date(turno.iniciado_at) : now) - new Date(turno.created_at)) / 60000)} min</div>
+              </div>
+              {pop === "cliente" && (
+                <div style={{ position: "absolute", top: 80, right: 150, zIndex: 5, width: 300, ...card, boxShadow: "0 20px 40px -16px rgba(28,25,23,0.3)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 10, fontSize: 14 }}>
+                  {[["Teléfono", turno.cliente_telefono], ["Pueblo", turno.pueblo], ["Compró en", turno.lugar_compra || "—"], ["Registró", titulo(turno.registrado_por_nombre)]].map(([l, v]) => (
+                    <div key={l} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span style={{ color: C.faint }}>{l}</span><b>{v}</b></div>
+                  ))}
                 </div>
               )}
-              {lista.map((t, i) => {
-                const proc = t.status === "en_proceso";
-                const next = primero && t.id === primero.id;
-                return (
-                  <div key={t.id} style={{ ...S.card, flex: "none", padding: "16px 18px", display: "flex", alignItems: "center", gap: 16, ...(next ? { border: `2px solid ${C.orange}`, boxShadow: "0 14px 32px -18px rgba(180,83,9,0.45)" } : {}) }}>
-                    <div style={{ width: 48, height: 48, flex: "none", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: mono, fontWeight: 600, fontSize: 16, background: proc ? C.soft2 : C.orangeSoft, color: proc ? C.faint : C.orangeDark }}>#{i + 1}</div>
-                    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-                        <span style={{ fontFamily: mono, fontSize: 15, fontWeight: 600, color: C.orange, flex: "none" }}>{t.numero}</span>
-                        <span style={{ fontSize: 19, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.cliente_nombre}</span>
-                        {t.nota && <span style={{ ...S.pill(C.moradoSoft, C.morado), fontWeight: 700 }}>Llamó antes</span>}
-                      </div>
-                      <div style={{ fontSize: 14, color: C.faint }}>{nm(t.modelo_codigo)} · Serie {t.serial}{t.lugar_compra ? " · " + t.lugar_compra : ""}</div>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, marginRight: 6, flex: "none" }}>
-                      <div style={{ fontFamily: mono, fontSize: 20, fontWeight: 600, color: proc ? C.orangeDark : C.ink }}>{fmtMMSS(now - new Date(proc ? t.iniciado_at : t.created_at))}</div>
-                      <div style={{ fontSize: 12, color: C.faint }}>{proc ? titulo(t.atendido_por_nombre) + " arreglando" : "en espera"}</div>
-                    </div>
-                    {proc
-                      ? <button type="button" onClick={() => abrirPin(t, "continuar")} style={{ ...S.ghost, height: 52, width: 130, flex: "none", fontSize: 16 }}>Continuar</button>
-                      : <button type="button" onClick={() => abrirPin(t, "iniciar")} style={next ? { ...S.btn(C.orange), width: 130, flex: "none" } : { ...S.ghost, height: 52, width: 130, flex: "none", fontSize: 16, fontWeight: 700, color: C.orangeDark, borderColor: "#E7CBA9" }}>Arreglar</button>}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
-            <Leaderboard titulo="Reparaciones de hoy" rows={lbRep} campo="terminados" unidad="terminados" max={6} />
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-              {[["Promedio", MIN(prom("segundos_servicio")), "por reparación", C.ink], ["Espera", MIN(prom("segundos_espera")), "promedio de hoy", C.orangeDark]].map(([l, v, s, c]) => (
-                <div key={l} style={{ ...S.card, borderRadius: 14, boxShadow: "none", padding: "14px 16px" }}>
-                  <div style={S.cap}>{l}</div>
-                  <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.5, color: c }}>{v}</div>
-                  <div style={{ fontSize: 12, color: C.faint }}>{s}</div>
+              {pop === "llamada" && (
+                <div style={{ position: "absolute", top: 80, right: 290, zIndex: 5, width: 380, ...card, border: "1px solid #DCD9FB", boxShadow: "0 20px 40px -16px rgba(83,74,183,0.35)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8, fontSize: 14, color: C.moradoDark }}>
+                  <div style={{ ...S.cap, color: C.morado }}>Llamada previa</div>
+                  <div>{turno.nota}</div>
                 </div>
-              ))}
+              )}
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* ---------- ¿Quién eres? + PIN ---------- */}
-      {screen === "pin" && turno && (
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr) 400px", gap: 20, padding: "24px 28px" }}>
-          <div style={{ ...S.card, padding: "26px 28px", display: "flex", flexDirection: "column", gap: 22, minHeight: 0, overflowY: "auto" }}>
-            <button type="button" onClick={volver} style={{ ...S.ghost, alignSelf: "flex-start", height: 38, borderRadius: 19, display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>Clientes en espera
-            </button>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ ...S.cap, color: C.orange }}>{modoPin === "iniciar" ? "Vas a arreglar" : "Vas a continuar"}</div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}><span style={{ fontFamily: mono, fontSize: 26, fontWeight: 600, color: C.orange }}>{turno.numero}</span><span style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.4 }}>{turno.cliente_nombre}</span></div>
-              <div style={{ fontSize: 16, color: C.faint }}>{nm(turno.modelo_codigo)} · Serie <span style={{ fontFamily: mono, color: C.ink }}>{turno.serial}</span>{turno.lugar_compra ? " · Compró en " + turno.lugar_compra : ""}</div>
-            </div>
-            <div style={{ height: 1, background: C.soft2 }} />
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>¿Quién eres?</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-                {tecnicos.map((e) => {
-                  const off = modoPin === "continuar" && e.id !== turno.atendido_por;
-                  return <button key={e.id} type="button" disabled={off} onClick={() => { setEmp(e); setPin(""); setPinMsg(""); }} style={{ ...S.opcion(emp && emp.id === e.id), height: 64, fontSize: 17, fontWeight: emp && emp.id === e.id ? 700 : 600, opacity: off ? 0.35 : 1 }}>{e.nombre}</button>;
-                })}
-              </div>
-            </div>
-          </div>
-          <div style={{ ...S.card, padding: "26px 28px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{emp ? "Hola, " + emp.nombre : "Escoge tu nombre"}</div>
-              <div style={{ fontSize: 14, color: C.faint, marginTop: 4 }}>{emp ? "Los mismos 3 dígitos que usas para ponchar" : "Toca tu nombre a la izquierda"}</div>
-            </div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.red, minHeight: 18 }}>{pinMsg}</div>
-            <PinPad pin={pin} setPin={(v) => { setPin(v); setPinMsg(""); }} onOk={confirmarPin} ready={emp && pin.length === 3} okLabel={modoPin === "iniciar" ? "Empezar a arreglar" : "Continuar"} />
-          </div>
-        </div>
-      )}
+            <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 16 }}>
+              <div style={{ ...card, display: "flex", flexDirection: "column", minHeight: 0, padding: "18px 20px", gap: 16 }}>
+                <div style={{ flex: "none", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+                  {pasos.map((p, i) => {
+                    const on = step === i + 1;
+                    return (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 12, minWidth: 0, ...(on ? { background: C.orangeSoft, border: `2px solid ${C.orange}` } : p.ok ? { background: "#F4FBF6", border: "2px solid #BFE3CB" } : { background: C.soft, border: `2px solid ${C.line}` }) }}>
+                        <span style={{ flex: "none", width: 32, height: 32, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 16, ...(on ? { background: C.orange, color: "#fff" } : p.ok ? { background: C.green, color: "#fff" } : { background: C.line2, color: C.faint }) }}>{p.ok && !on ? "✓" : i + 1}</span>
+                        <span style={{ fontSize: 17, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: on ? C.orangeDark : p.ok ? C.greenDark : C.faint }}>{p.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
 
-      {/* ---------- Trabajando el turno: 3 pasos ---------- */}
-      {screen === "work" && turno && (
-        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 16, padding: "20px 28px" }}>
-          <div style={{ ...S.card, flex: "none", padding: "16px 22px", display: "flex", alignItems: "center", gap: 16, position: "relative" }}>
-            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
-                <span style={{ fontFamily: mono, fontSize: 22, fontWeight: 600, color: C.orange, flex: "none" }}>{turno.numero}</span>
-                <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{turno.cliente_nombre}</span>
-              </div>
-              <div style={{ fontSize: 15, color: C.faint }}>{nm(turno.modelo_codigo)} · Serie <span style={{ fontFamily: mono, color: C.ink }}>{turno.serial}</span>{turno.lugar_compra ? " · Compró en " + turno.lugar_compra : ""}</div>
-            </div>
-            {turno.nota && <button type="button" onClick={() => setPop(pop === "llamada" ? null : "llamada")} style={chipTop(pop === "llamada", C.morado, C.moradoSoft)}>Llamó antes</button>}
-            <button type="button" onClick={() => setPop(pop === "cliente" ? null : "cliente")} style={chipTop(pop === "cliente", C.ink2, "#fff")}>Datos del cliente</button>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", paddingLeft: 20, marginLeft: 4, borderLeft: `1px solid ${C.line}`, flex: "none" }}>
-              <div style={{ fontFamily: mono, fontSize: 32, fontWeight: 600, lineHeight: 1, letterSpacing: -0.5 }}>{fmtMMSS(now - new Date(turno.iniciado_at))}</div>
-              <div style={{ fontSize: 12, color: C.faint, marginTop: 5 }}>{emp && emp.nombre} · en servicio</div>
-            </div>
-            {pop === "cliente" && (
-              <div style={{ position: "absolute", top: 74, right: 150, zIndex: 5, width: 300, ...S.card, boxShadow: "0 20px 40px -16px rgba(28,25,23,0.3)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 10, fontSize: 14 }}>
-                {[["Teléfono", turno.cliente_telefono], ["Pueblo", turno.pueblo], ["Compró en", turno.lugar_compra || "—"], ["Registró", titulo(turno.registrado_por_nombre)]].map(([l, v]) => (
-                  <div key={l} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span style={{ color: C.faint }}>{l}</span><b>{v}</b></div>
-                ))}
-              </div>
-            )}
-            {pop === "llamada" && (
-              <div style={{ position: "absolute", top: 74, right: 290, zIndex: 5, width: 380, ...S.card, border: "1px solid #DCD9FB", boxShadow: "0 20px 40px -16px rgba(83,74,183,0.35)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8, fontSize: 14, color: C.moradoDark }}>
-                <div style={{ ...S.cap, color: C.morado }}>Llamada previa</div>
-                <div>{turno.nota}</div>
-              </div>
-            )}
-          </div>
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
+                  <div style={{ flex: "none", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.4 }}>{pregunta}</div>
+                    <div style={{ fontSize: 17, color: C.muted }}>{ayuda}</div>
+                  </div>
 
-          <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: 16 }}>
-            <div style={{ ...S.card, display: "flex", flexDirection: "column", minHeight: 0, padding: 14 }}>
-              <div style={{ ...S.segWrap, gridTemplateColumns: "repeat(3, minmax(0, 1fr))", flex: "none" }}>
-                {pasos.map((p, i) => {
-                  const on = step === i + 1;
-                  return (
-                    <button key={p.label} type="button" onClick={() => setStep(i + 1)} style={{ ...S.seg(on), justifyContent: "flex-start", gap: 12, padding: "10px 14px", textAlign: "left", minWidth: 0 }}>
-                      <span style={{ flex: "none", width: 30, height: 30, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 14, background: p.ok && !on ? C.greenSoft : on ? C.orange : C.line2, color: p.ok && !on ? C.green : on ? "#fff" : C.faint }}>{p.ok && !on ? "✓" : i + 1}</span>
-                      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
-                        <span style={S.cap}>{p.label}</span>
-                        <span style={{ fontSize: 15, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%", color: p.ok ? C.ink : "#A8A29E" }}>{p.val}</span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+                  {step === 1 && !sinCat && (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+                      {ninguna && (
+                        <button type="button" onClick={() => toggle(ninguna)} style={{ gridColumn: "1 / -1", height: 66, padding: "0 22px", borderRadius: 14, fontSize: 18, display: "flex", alignItems: "center", justifyContent: "space-between", ...opcion(tieneNinguna) }}>
+                          <span>Ninguna pieza estaba dañada</span>
+                          <span style={{ fontSize: 14, fontWeight: 600, padding: "4px 12px", borderRadius: 12, ...(tieneNinguna ? { background: C.orange, color: "#fff" } : { background: C.soft2, color: C.faint }) }}>Orientación</span>
+                        </button>
+                      )}
+                      {reales.map((p) => <button key={p.id} type="button" onClick={() => toggle(p)} style={{ height: 66, borderRadius: 14, fontSize: 18, padding: "0 10px", ...opcion(sel.includes(p.id)) }}>{p.nombre}</button>)}
+                      {nuevaPieza === null && <button type="button" onClick={() => { setNuevaPieza(""); setAddMsg(""); }} style={{ height: 66, borderRadius: 14, border: "2px dashed #D9B48A", background: "#FFFCF7", color: C.orangeDark, fontSize: 18, fontWeight: 700 }}>+ Otra pieza</button>}
+                    </div>
+                  )}
+                  {step === 1 && !sinCat && nuevaPieza !== null && inputNuevo(nuevaPieza, setNuevaPieza, agregarPieza, `Nueva pieza para ${nm(turno.modelo_codigo)}`, C.orange)}
 
-              <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 10px 6px", display: "flex", flexDirection: "column", gap: 18 }}>
-                {step === 1 && (
-                  <>
-                    {pasoTitulo(1, "¿Qué pieza estaba dañada?", sinCat ? `El ${nm(turno.modelo_codigo)} no lleva catálogo de piezas` : `Piezas del ${nm(turno.modelo_codigo)} · puedes marcar varias`)}
-                    {sinCat
-                      ? <div style={{ padding: "14px 16px", borderRadius: 12, background: C.orangeSoft, color: C.orangeDark, fontSize: 15, fontWeight: 600 }}>Este modelo no lleva piezas. Sigue al resultado.</div>
-                      : <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-                          {opciones.map((p) => <button key={p.id} type="button" onClick={() => toggle(p)} style={S.opcion(sel.includes(p.id))}>{p.nombre}</button>)}
-                          {nuevaPieza === null && <button type="button" onClick={() => { setNuevaPieza(""); setAddMsg(""); }} style={{ minHeight: 62, borderRadius: 12, border: `1px dashed ${C.orangeLine}`, background: "#FFFCF7", color: C.orangeDark, fontSize: 16, fontWeight: 700 }}>+ Otra pieza</button>}
-                        </div>}
-                    {!sinCat && nuevaPieza !== null && inputNuevo(nuevaPieza, setNuevaPieza, agregarPieza, `Nueva pieza para ${nm(turno.modelo_codigo)}`, C.orange)}
-                    {addMsg && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: C.soft2, color: C.ink2 }}>{addMsg}</div>}
-                  </>
-                )}
-
-                {step === 2 && (
-                  <>
-                    {pasoTitulo(2, "¿Cómo terminó?", !pasos[0].ok ? "Primero marca la pieza dañada (paso 1)" : sinCat ? "Escoge el resultado" : tieneNinguna ? 'Marcaste "Ninguna": solo salen las opciones que aplican' : `Marcaste ${nombresSel}: solo salen las opciones que aplican`)}
+                  {step === 2 && p1ok && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                      {RESULTADOS_VENTANILLA.filter((r) => validRes(r) || !pasos[0].ok).map((r) => {
-                        const ok = validRes(r) && pasos[0].ok;
+                      {opcionesRes.map(([r, t, d]) => {
                         const on = res === r;
                         return (
-                          <button key={r} type="button" onClick={() => ok && (setRes(r), setStep(causa ? 2 : 3))}
-                            style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 20px", borderRadius: 14, textAlign: "left", ...(ok ? S.opcion(on) : { border: `1px dashed ${C.line2}`, background: C.soft, color: "#A8A29E" }) }}>
-                            <span style={{ flex: "none", width: 22, height: 22, borderRadius: "50%", boxSizing: "border-box", ...(on ? { border: `7px solid ${C.orange}`, background: "#fff" } : { border: `2px solid ${C.line3}` }) }} />
+                          <button key={r} type="button" onClick={() => setRes(r)} style={{ display: "flex", alignItems: "center", gap: 18, padding: "16px 22px", borderRadius: 14, textAlign: "left", ...opcion(on), fontWeight: 400 }}>
+                            <span style={radio(on)} />
                             <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-                              <span style={{ fontSize: 18, fontWeight: 700 }}>{r}</span>
-                              <span style={{ fontSize: 14, color: C.faint, fontWeight: 400 }}>{DESC_RESULTADO[r]}</span>
+                              <span style={{ fontSize: 20, fontWeight: 700 }}>{t}</span>
+                              <span style={{ fontSize: 16, color: C.muted }}>{d}</span>
                             </span>
                           </button>
                         );
                       })}
+                      {noQuiso && (
+                        <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderRadius: 14, background: "#F4FBF6", border: "1px solid #BFE3CB" }}>
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flex: "none" }}><path d="M20 6 9 17l-5-5" /></svg>
+                          <span style={{ fontSize: 18, color: C.greenDark }}><b>Tu parte terminó.</b> Ahora el cliente pasa a Anthony.</span>
+                        </div>
+                      )}
                     </div>
-                  </>
-                )}
+                  )}
 
-                {step === 3 && (
-                  <>
-                    {pasoTitulo(3, "¿Qué causó el problema?", "Una sola · esto es lo que medimos para mejorar")}
+                  {step === 3 && !noQuiso && (
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-                      {causas.map((c) => <button key={c.id} type="button" onClick={() => setCausa(c.nombre)} style={{ ...S.opcion(causa === c.nombre, C.ink, C.ink, "#fff"), fontSize: 15 }}>{c.nombre}</button>)}
-                      {nuevaCausa === null && <button type="button" onClick={() => { setNuevaCausa(""); setAddMsg(""); }} style={{ minHeight: 62, borderRadius: 12, border: "1px dashed #A8A29E", background: C.soft, color: C.ink, fontSize: 15, fontWeight: 700 }}>+ Otra causa</button>}
+                      {causas.map((c) => <button key={c.id} type="button" onClick={() => setCausa(c.nombre)} style={{ minHeight: 62, padding: "4px 12px", borderRadius: 14, fontSize: 16, ...(causa === c.nombre ? { border: `2px solid ${C.ink}`, background: C.ink, color: "#fff", fontWeight: 700 } : { border: `1px solid ${C.line2}`, background: "#fff", color: C.ink, fontWeight: 500 }) }}>{c.nombre}</button>)}
+                      {nuevaCausa === null && <button type="button" onClick={() => { setNuevaCausa(""); setAddMsg(""); }} style={{ minHeight: 62, borderRadius: 14, border: "2px dashed #A8A29E", background: C.soft, color: C.ink, fontSize: 17, fontWeight: 700 }}>+ Otra causa</button>}
                     </div>
-                    {nuevaCausa !== null && inputNuevo(nuevaCausa, setNuevaCausa, agregarCausa, "Nueva causa", C.ink)}
-                    {addMsg && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: C.soft2, color: C.ink2 }}>{addMsg}</div>}
-                  </>
-                )}
-              </div>
-            </div>
+                  )}
+                  {step === 3 && !noQuiso && nuevaCausa !== null && inputNuevo(nuevaCausa, setNuevaCausa, agregarCausa, "Nueva causa", C.ink)}
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
-              <div style={{ ...S.card, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={S.cap}>Resumen</div>
-                {pasos.map((p) => (
-                  <div key={p.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, paddingBottom: 10, borderBottom: `1px solid ${C.soft2}` }}>
-                    <span style={{ fontSize: 14, color: C.faint, flex: "none" }}>{p.label}</span>
-                    <span style={{ fontSize: 15, fontWeight: 700, textAlign: "right", color: p.ok ? C.ink : C.red }}>{p.val}</span>
-                  </div>
-                ))}
-                <button type="button" onClick={terminar} style={{ ...S.btn(listo ? C.green : C.gris), height: 60, fontSize: 18, marginTop: 4 }}>Terminar turno</button>
-                <div style={{ fontSize: 13, color: C.faint, textAlign: "center" }}>{listo ? "Todo listo" : "Falta: " + faltan.join(", ")}</div>
-                {err && <div style={{ fontSize: 13, fontWeight: 600, color: C.redDark, textAlign: "center" }}>{err}</div>}
-              </div>
-
-              {siguiente && (
-                <div style={{ ...S.card, borderRadius: 14, boxShadow: "none", padding: "14px 18px", display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={S.cap}>Próximo</div>
-                    <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{siguiente.cliente_nombre}</div>
-                    <div style={{ fontSize: 13, color: C.faint }}>{siguiente.numero} · {nm(siguiente.modelo_codigo)}</div>
-                  </div>
-                  <div style={{ fontFamily: mono, fontSize: 15, fontWeight: 600, color: C.orangeDark }}>{fmtMMSS(now - new Date(siguiente.created_at))}</div>
+                  {addMsg && <div style={{ flex: "none", fontSize: 14, fontWeight: 600, padding: "10px 14px", borderRadius: 12, background: C.soft2, color: C.ink2 }}>{addMsg}</div>}
+                  {err && <div style={{ flex: "none", fontSize: 14, fontWeight: 600, padding: "10px 14px", borderRadius: 12, background: C.redSoft, color: C.redDark }}>{err}</div>}
                 </div>
-              )}
 
-              <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-                <button type="button" onClick={devolver} style={{ ...S.ghost, height: 48 }}>Devolver a la lista de espera</button>
-                {confirmAnular ? (
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button type="button" onClick={anular} style={{ ...S.btn(C.red), flex: 1, height: 48, fontSize: 15 }}>Sí, anular</button>
-                    <button type="button" onClick={() => setConfirmAnular(false)} style={{ ...S.ghost, height: 48 }}>No</button>
+                <div style={{ flex: "none", display: "flex", gap: 12, paddingTop: 16, borderTop: `1px solid ${C.soft2}` }}>
+                  <button type="button" onClick={atras} disabled={step === 1}
+                    style={{ flex: "none", width: 190, height: 72, borderRadius: 16, fontSize: 20, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                      ...(step > 1 ? { border: `2px solid ${C.line3}`, background: "#fff", color: C.ink2 } : { border: `2px solid ${C.soft2}`, background: C.soft, color: C.line3 }) }}>
+                    {flecha("m15 18-6-6 6-6")}Atrás
+                  </button>
+                  <button type="button" onClick={avanzar} disabled={!okPaso || busy}
+                    style={{ flex: 1, height: 72, borderRadius: 16, border: "none", fontSize: 22, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                      ...(okPaso ? { background: C.green, boxShadow: "0 10px 22px -10px rgba(21,128,61,0.7)" } : { background: C.gris }) }}>
+                    {avanzarTxt}{flecha("m9 18 6-6-6-6")}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
+                <div style={{ ...card, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <div style={{ fontSize: 20, fontWeight: 700 }}>¿Cómo vas?</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: C.muted }}>{hechos} de 3 pasos</div>
                   </div>
-                ) : (
-                  <button type="button" onClick={() => setConfirmAnular(true)} style={{ ...S.ghost, height: 48, borderColor: "#F3C4C4", color: C.red, fontWeight: 700 }}>Anular turno (cliente se fue)</button>
+                  <div style={{ height: 14, borderRadius: 7, background: C.soft2, overflow: "hidden" }}>
+                    <div style={{ height: "100%", borderRadius: 7, transition: "width 0.3s", width: Math.round(hechos / 3 * 100) + "%", background: hechos === 3 ? C.green : C.orange }} />
+                  </div>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: hechos === 3 ? C.green : C.orangeDark }}>{hechos === 3 && noQuiso ? "Todo listo, dale a Enviar" : ANIMO[hechos]}</div>
+                  {pasos.map((p, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 0", borderTop: `1px solid ${C.soft2}` }}>
+                      <span style={{ flex: "none", width: 30, height: 30, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, ...(p.ok ? { background: C.green, color: "#fff" } : { background: C.soft2, color: "#A8A29E" }) }}>{p.ok ? "✓" : i + 1}</span>
+                      <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                        <span style={{ fontSize: 14, color: C.faint }}>Paso {i + 1} · {p.label}</span>
+                        <span style={{ fontSize: 17, fontWeight: 700, color: p.ok ? C.ink : "#A8A29E", overflow: "hidden", textOverflow: "ellipsis" }}>{p.ok ? p.val : "Pendiente"}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {siguiente && (
+                  <div style={{ ...card, boxShadow: "0 18px 40px -30px rgba(28,25,23,0.3)", padding: "16px 20px", display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={S.cap}>Próximo</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{siguiente.cliente_nombre}</div>
+                      <div style={{ fontSize: 14, color: C.faint }}>{nm(siguiente.modelo_codigo)} · {posFila(siguiente)}º en fila</div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                      <div style={{ fontFamily: mono, fontSize: 20, fontWeight: 600, color: C.orangeDark, lineHeight: 1 }}>{minDesde(siguiente.created_at, now)} min</div>
+                      <div style={{ fontSize: 11, color: "#A8A29E", marginTop: 3 }}>esperando</div>
+                    </div>
+                  </div>
                 )}
+
+                <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <button type="button" onClick={devolver} style={{ height: 54, borderRadius: 14, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 16, fontWeight: 600 }}>Devolver a la lista de espera</button>
+                  {confirmAnular ? (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button type="button" onClick={anular} style={{ flex: 1, height: 54, borderRadius: 14, border: "none", background: C.red, color: "#fff", fontSize: 16, fontWeight: 700 }}>Sí, anular</button>
+                      <button type="button" onClick={() => setConfirmAnular(false)} style={{ height: 54, padding: "0 18px", borderRadius: 14, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 16, fontWeight: 600 }}>No</button>
+                    </div>
+                  ) : (
+                    <button type="button" onClick={() => setConfirmAnular(true)} style={{ height: 54, borderRadius: 14, border: "1px solid #F3C4C4", background: "#fff", color: C.red, fontSize: 16, fontWeight: 700 }}>Anular turno (cliente se fue)</button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </>
       )}
 
-      {(screen === "work" || screen === "pin") && !turno && (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <div style={{ ...S.card, borderRadius: 20, padding: 36, width: 480, textAlign: "center", display: "flex", flexDirection: "column", gap: 14 }}>
+      {(screen === "work" || screen === "pin") && !turnoPin && (
+        <div style={{ position: "absolute", inset: 0, zIndex: 20, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div style={{ ...card, padding: 36, width: 480, textAlign: "center", display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ fontSize: 20, fontWeight: 700 }}>Este turno ya no está abierto</div>
             <div style={{ fontSize: 15, color: C.faint }}>Lo cerraron o anularon desde otro equipo.</div>
-            <button type="button" onClick={volver} style={S.btn(C.ink)}>Volver a clientes en espera</button>
+            <button type="button" onClick={volver} style={S.btn(C.ink)}>Volver a la lista de espera</button>
           </div>
         </div>
       )}
 
       {screen === "done" && done && (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <div style={{ ...S.card, borderRadius: 20, boxShadow: "0 24px 48px -24px rgba(28,25,23,0.25)", padding: "44px 56px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, width: 560, textAlign: "center" }}>
-            <div style={{ width: 72, height: 72, borderRadius: "50%", background: C.greenSoft, color: C.green, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+        <>
+          <TopBar />
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+            <div style={{ ...card, boxShadow: "0 24px 48px -24px rgba(28,25,23,0.25)", padding: "44px 56px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, width: 560, textAlign: "center" }}>
+              <div style={{ width: 72, height: 72, borderRadius: "50%", background: C.greenSoft, color: C.green, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+              </div>
+              <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.3 }}>{done.anthony ? "Turno enviado a Anthony" : "Turno terminado"}</div>
+              <div style={{ fontSize: 15, color: C.faint }}>{done.txt}</div>
+              <button type="button" onClick={volver} style={{ ...S.btn(C.ink), marginTop: 10, height: 56, padding: "0 28px" }}>Volver a la lista de espera</button>
+              <div style={{ fontSize: 13, color: C.faint }}>Tu sesión se cierra sola en {Math.max(0, cuenta)} s · el próximo cliente pide PIN otra vez</div>
             </div>
-            <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.3 }}>Turno {done.numero} terminado</div>
-            <div style={{ fontSize: 15, color: C.faint }}>{done.txt}</div>
-            <button type="button" onClick={() => { setDone(null); volver(); }} style={{ ...S.btn(C.ink), marginTop: 10 }}>Volver a clientes en espera</button>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
