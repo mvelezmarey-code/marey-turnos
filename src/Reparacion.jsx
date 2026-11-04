@@ -8,7 +8,6 @@ const MIN = (seg) => (seg == null ? "—" : Math.round(seg / 60) + " min");
 const ESPERA_LARGA = 15; // minutos: el tiempo sale en rojo
 const MAX_FILAS = 4;
 const CIERRE_SEG = 8; // la pantalla de "terminado" se cierra sola y la sesión se acaba
-const ANIMO = ["Vamos a empezar", "Vas bien, sigue así", "Ya casi terminas", "Todo listo, dale a Terminar"];
 const sombra = "0 18px 40px -28px rgba(28,25,23,0.28)";
 const card = { background: "#fff", border: `1px solid ${C.line}`, borderRadius: 20, boxShadow: sombra };
 const flecha = (d) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
@@ -16,13 +15,13 @@ const flecha = (d) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none
 // "Elemento superior" -> "el elemento superior"; "Válvula de alivio" -> "la válvula de alivio"
 const conArticulo = (n) => (/a$/i.test(n.split(" ")[0]) ? "la " : "el ") + n.charAt(0).toLowerCase() + n.slice(1);
 
-function TopBar() {
+function TopBar({ soloHora }) {
   const now = useNow(15000);
   const fecha = new Date(now).toLocaleDateString("es-PR", { timeZone: TZ, weekday: "long", day: "numeric", month: "long" });
   const hora = new Date(now).toLocaleTimeString("es-PR", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
   return (
     <div style={{ flex: "none", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 28px 0" }}>
-      <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 1.2, color: C.orange }}>REPARACIÓN VENTANILLA</div>
+      <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 1.2, color: C.orange }}>{soloHora ? "" : "REPARACIÓN VENTANILLA"}</div>
       <div style={{ fontSize: 15, fontWeight: 600, color: C.ink2 }}>{titulo(fecha)} · <span style={{ fontFamily: mono }}>{hora}</span></div>
     </div>
   );
@@ -188,16 +187,10 @@ export default function Reparacion() {
     else if (step === 2) { if (noQuiso) terminar(); else setStep(3); }
     else terminar();
   };
-  const avanzarTxt = busy ? "Guardando..."
-    : step === 1 ? (p1ok ? (tieneNinguna ? "Siguiente: la causa (es orientación)" : "Siguiente: ¿lo quiere reparar?") : "Toca una pieza para seguir")
-    : step === 2 ? (res ? (noQuiso ? "Enviar a Anthony" : "Siguiente: la causa") : "Toca una opción para seguir")
-    : listo ? "Terminar turno" : "Toca una causa para terminar";
-  const pregunta = step === 1 ? "¿Qué pieza estaba dañada?"
+  const avanzarTxt = busy ? "Guardando..." : step === 2 && noQuiso ? "Enviar a Anthony" : step === 3 ? "Terminar turno" : "Siguiente";
+  const pregunta = step === 1 ? (sinCat ? "Este modelo no lleva piezas · dale a Siguiente" : "¿Qué pieza estaba dañada?")
     : step === 2 ? (!p1ok ? "Primero marca la pieza dañada" : sinCat ? "¿El cliente quiere reparar el calentador?" : `¿El cliente quiere reparar ${piezaFrase}?`)
     : orientacion ? "¿Por qué vino el cliente?" : "¿Qué causó el problema?";
-  const ayuda = step === 1 ? (sinCat ? `El ${nm(turno && turno.modelo_codigo)} no lleva catálogo de piezas. Sigue al próximo paso.` : "Toca la pieza dañada. Puedes marcar más de una.")
-    : step === 2 ? "Toca Sí o No."
-    : orientacion ? "Nada estaba dañado, es orientación. Toca la causa de lo que le pasaba." : "Toca una sola causa.";
 
   const opcion = (on) => on
     ? { border: `2px solid ${C.orange}`, background: C.orangeSoft, color: C.orangeDark, fontWeight: 700, boxShadow: "0 6px 14px -10px rgba(180,83,9,0.6)" }
@@ -350,7 +343,7 @@ export default function Reparacion() {
       {/* ---------- Trabajando el turno ---------- */}
       {screen === "work" && turno && (
         <>
-          <TopBar />
+          <TopBar soloHora />
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 16, padding: "16px 28px 24px" }}>
             <div style={{ ...card, flex: "none", padding: "16px 22px", display: "flex", alignItems: "center", gap: 16, position: "relative" }}>
               <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -359,12 +352,11 @@ export default function Reparacion() {
                   <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{turno.cliente_nombre}</span>
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden" }}>
-                  <span style={{ flex: "none", fontSize: 22, fontWeight: 700, color: C.orangeDark }}>{nm(turno.modelo_codigo)}</span>
+                  <span style={{ flex: "none", fontSize: 22, fontWeight: 700, color: C.ink }}>{nm(turno.modelo_codigo)}</span>
                   <span style={{ fontSize: 15, color: C.faint, overflow: "hidden", textOverflow: "ellipsis" }}>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turno.serial}</span>{turno.lugar_compra ? " · Compró en " + turno.lugar_compra : ""}</span>
                 </div>
               </div>
-              {turno.nota && <button type="button" onClick={() => setPop(pop === "llamada" ? null : "llamada")} style={chipTop(pop === "llamada", C.morado, C.moradoSoft)}>Llamó antes</button>}
-              <button type="button" onClick={() => setPop(pop === "cliente" ? null : "cliente")} style={chipTop(pop === "cliente", C.ink2, "#fff")}>Datos del cliente</button>
+              <button type="button" onClick={() => setPop(pop === "cliente" ? null : "cliente")} style={chipTop(pop === "cliente", C.ink2, "#fff")}>Info del cliente</button>
               <button type="button" onClick={devolver} style={{ flex: "none", height: 52, padding: "0 16px", borderRadius: 14, display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", lineHeight: 1.15, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2 }}>
                 <span style={{ fontSize: 15, fontWeight: 700 }}>Devolver</span><span style={{ fontSize: 12, color: C.faint }}>a la lista de espera</span>
               </button>
@@ -374,35 +366,29 @@ export default function Reparacion() {
                   <button type="button" onClick={() => setConfirmAnular(false)} style={{ flex: "none", height: 52, padding: "0 14px", borderRadius: 14, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 15, fontWeight: 600 }}>No</button>
                 </>
               ) : (
-                <button type="button" onClick={() => setConfirmAnular(true)} style={{ flex: "none", height: 52, padding: "0 16px", borderRadius: 14, display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", lineHeight: 1.15, border: "1px solid #F3C4C4", background: "#fff", color: C.red }}>
+                <button type="button" onClick={() => setConfirmAnular(true)} style={{ flex: "none", height: 52, padding: "0 16px", borderRadius: 14, display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", lineHeight: 1.15, border: `1px solid ${C.line2}`, background: C.soft2, color: C.red }}>
                   <span style={{ fontSize: 15, fontWeight: 700 }}>Anular turno</span><span style={{ fontSize: 12, opacity: 0.8 }}>el cliente se fue</span>
                 </button>
               )}
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", paddingLeft: 20, marginLeft: 4, borderLeft: `1px solid ${C.line}`, flex: "none" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#A8A29E", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Tiempo reparando</div>
                 <div style={{ fontFamily: mono, fontSize: 30, fontWeight: 600, lineHeight: 1, letterSpacing: -0.5 }}>{minDesde(turno.iniciado_at, now)} min</div>
-                <div style={{ fontSize: 12, color: C.faint, marginTop: 4 }}><b style={{ color: C.ink2 }}>{emp && emp.nombre}</b> · esperó {Math.round(((turno.iniciado_at ? new Date(turno.iniciado_at) : now) - new Date(turno.created_at)) / 60000)} min</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.ink2, marginTop: 4 }}>{emp && emp.nombre}</div>
               </div>
               {pop === "cliente" && (
-                <div style={{ position: "absolute", top: 80, right: 150, zIndex: 5, width: 300, ...card, boxShadow: "0 20px 40px -16px rgba(28,25,23,0.3)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 10, fontSize: 14 }}>
+                <div style={{ position: "absolute", top: 80, right: 340, zIndex: 5, width: 340, ...card, boxShadow: "0 20px 40px -16px rgba(28,25,23,0.3)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 10, fontSize: 14 }}>
                   {[["Teléfono", turno.cliente_telefono], ["Pueblo", turno.pueblo], ["Compró en", turno.lugar_compra || "—"], ["Registró", titulo(turno.registrado_por_nombre)]].map(([l, v]) => (
                     <div key={l} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span style={{ color: C.faint }}>{l}</span><b>{v}</b></div>
                   ))}
-                </div>
-              )}
-              {pop === "llamada" && (
-                <div style={{ position: "absolute", top: 80, right: 290, zIndex: 5, width: 380, ...card, border: "1px solid #DCD9FB", boxShadow: "0 20px 40px -16px rgba(83,74,183,0.35)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8, fontSize: 14, color: C.moradoDark }}>
-                  <div style={{ ...S.cap, color: C.morado }}>Llamada previa</div>
-                  <div>{turno.nota}</div>
+                  {turno.nota && <div style={{ marginTop: 4, padding: "10px 12px", borderRadius: 10, background: C.moradoSoft, color: C.moradoDark }}><div style={{ ...S.cap, color: C.morado, marginBottom: 4 }}>Llamó antes</div>{turno.nota}</div>}
                 </div>
               )}
             </div>
 
             {/* ¿Cómo vas? arriba, en horizontal */}
             <div style={{ ...card, borderRadius: 16, flex: "none", padding: "8px 20px", display: "flex", alignItems: "center", gap: 20 }}>
-              <div style={{ flex: "none", width: 170, display: "flex", flexDirection: "column" }}>
+              <div style={{ flex: "none", width: 110, display: "flex", flexDirection: "column" }}>
                 <div style={{ fontSize: 15, fontWeight: 700 }}>¿Cómo vas?</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: hechos === 3 ? C.green : C.orangeDark }}>{hechos === 3 && noQuiso ? "Todo listo, dale a Enviar" : ANIMO[hechos]}</div>
               </div>
               <div style={{ flex: 1, minWidth: 0, position: "relative", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", alignItems: "center" }}>
                 <div style={{ position: "absolute", left: 16, right: 16, top: 14, height: 6, borderRadius: 3, background: C.soft2, overflow: "hidden" }}>
@@ -425,7 +411,6 @@ export default function Reparacion() {
               </div>
               <div style={{ flex: "none", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
                 <div style={{ fontFamily: mono, fontSize: 20, fontWeight: 600, lineHeight: 1, color: hechos === 3 ? C.green : C.orangeDark }}>{hechos}/3</div>
-                <div style={{ fontSize: 11, color: "#A8A29E" }}>pasos</div>
               </div>
             </div>
 
@@ -436,7 +421,6 @@ export default function Reparacion() {
                   <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 28 }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
                       <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.4 }}>{pregunta}</div>
-                      <div style={{ fontSize: 17, color: C.muted }}>{ayuda}</div>
                     </div>
                     {step === 1 && !sinCat && ninguna && (
                       <button type="button" onClick={() => toggle(ninguna)} style={{ flex: "none", width: 420, maxWidth: "48%", height: 66, padding: "0 22px", borderRadius: 14, fontSize: 18, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, ...opcion(tieneNinguna) }}>
@@ -492,7 +476,7 @@ export default function Reparacion() {
                 <div style={{ flex: "none", display: "flex", gap: 12, paddingTop: 16, borderTop: `1px solid ${C.soft2}` }}>
                   <button type="button" onClick={atras} disabled={step === 1}
                     style={{ flex: "none", width: 190, height: 72, borderRadius: 16, fontSize: 20, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                      ...(step > 1 ? { border: `2px solid ${C.line3}`, background: "#fff", color: C.ink2 } : { border: `2px solid ${C.soft2}`, background: C.soft, color: C.line3 }) }}>
+                      ...(step > 1 ? { border: "none", background: C.red, color: "#fff", boxShadow: "0 10px 22px -12px rgba(185,28,28,0.7)" } : { border: "none", background: C.soft2, color: C.line3 }) }}>
                     {flecha("m15 18-6-6 6-6")}Atrás
                   </button>
                   <button type="button" onClick={avanzar} disabled={!okPaso || busy}
