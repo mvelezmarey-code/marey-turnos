@@ -15,6 +15,26 @@ const flecha = (d) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none
 // "Elemento superior" -> "el elemento superior"; "Válvula de alivio" -> "la válvula de alivio"
 const conArticulo = (n) => (/a$/i.test(n.split(" ")[0]) ? "la " : "el ") + n.charAt(0).toLowerCase() + n.slice(1);
 
+// ---------- Gamificación: el calentador se va calentando con cada paso ----------
+const AGUA = ["#93C5FD", "#FACC15", "#F97316", "#DC2626"];
+const TEMA_COLOR = ["#2563EB", "#CA8A04", "#EA580C", "#DC2626"];
+const TEMA = ["Fría", "Tibia", "Calentando", "¡Caliente!"];
+function Calentador({ nivel, k = 1 }) {
+  const n = Math.min(3, Math.max(0, nivel));
+  const vapor = (x, h, rot) => <div style={{ position: "absolute", left: x * k, top: -h * k, width: 4 * k, height: h * k, borderRadius: 4, background: C.line3, opacity: 0.8, transform: `rotate(${rot}deg)` }} />;
+  return (
+    <div style={{ position: "relative", flex: "none", width: 30 * k, height: 46 * k }} aria-hidden="true">
+      {n === 3 && <>{vapor(5, 10, -12)}{vapor(13, 13, 0)}{vapor(21, 10, 12)}</>}
+      <div style={{ position: "absolute", left: 7 * k, top: 0, width: 4 * k, height: 6 * k, background: C.faint, borderRadius: 2 }} />
+      <div style={{ position: "absolute", right: 7 * k, top: 0, width: 4 * k, height: 6 * k, background: C.faint, borderRadius: 2 }} />
+      <div style={{ position: "absolute", left: 0, right: 0, top: 5 * k, bottom: 0, border: `${2 * k}px solid ${C.ink2}`, borderRadius: `${9 * k}px ${9 * k}px ${6 * k}px ${6 * k}px`, background: "#fff", overflow: "hidden", boxSizing: "border-box" }}>
+        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: "72%", transition: "background 0.5s", background: AGUA[n] }} />
+        <div style={{ position: "absolute", left: "50%", top: 6 * k, marginLeft: -4 * k, width: 8 * k, height: 8 * k, borderRadius: "50%", background: "#fff", border: `${1.5 * k}px solid ${C.ink2}`, boxSizing: "border-box" }} />
+      </div>
+    </div>
+  );
+}
+
 function TopBar({ soloHora }) {
   const now = useNow(15000);
   const fecha = new Date(now).toLocaleDateString("es-PR", { timeZone: TZ, weekday: "long", day: "numeric", month: "long" });
@@ -72,6 +92,13 @@ export default function Reparacion() {
   const reales = opciones.filter((p) => !p.es_ninguna);
   const tieneNinguna = !!(ninguna && sel.includes(ninguna.id));
   const posFila = (t) => enEspera.findIndex((x) => x.id === t.id) + 1;
+  // Cuántos lleva hoy y en qué lugar va (para la pantalla de terminado)
+  const statsDone = (() => {
+    if (!done) return null;
+    const ord = [...lbRep].sort((a, b) => b.terminados - a.terminados);
+    const i = ord.findIndex((r) => String(r.nombre).toLowerCase() === String(done.nombre).toLowerCase());
+    return i >= 0 && ord[i].terminados > 0 ? { n: ord[i].terminados, pos: i + 1 } : null;
+  })();
 
   const limpiarTrabajo = () => { setStep(1); setSel([]); setRes(null); setCausa(null); setErr(""); setPop(null); setConfirmAnular(false); setNuevaPieza(null); setNuevaCausa(null); setAddMsg(""); setBusy(false); };
   const abrirPin = (t, modo) => { setTurnoId(t.id); setModoPin(modo); setEmp(modo === "continuar" ? tecnicos.find((x) => x.id === t.atendido_por) || null : null); setPin(""); setPinMsg(""); setScreen("pin"); };
@@ -167,7 +194,7 @@ export default function Reparacion() {
       await rpc("terminar_turno", { p_turno: turnoId, p_empleado: emp.id, p_resultado: res, p_piezas: sinCat ? [] : sel, p_causa: noQuiso ? null : causa });
       const mins = minDesde(turno.iniciado_at, now);
       setDone({
-        numero: turno.numero, anthony: noQuiso,
+        numero: turno.numero, anthony: noQuiso, nombre: emp.nombre,
         txt: [turno.cliente_nombre, nm(turno.modelo_codigo), nombresSel || null, noQuiso ? "Anthony pone con qué se fue" : "Causa: " + causa, mins + " min reparando", titulo(emp.nombre)].filter(Boolean).join(" · "),
       });
       setScreen("done"); recargar();
@@ -387,12 +414,16 @@ export default function Reparacion() {
 
             {/* ¿Cómo vas? arriba, en horizontal */}
             <div style={{ ...card, borderRadius: 16, flex: "none", padding: "8px 20px", display: "flex", alignItems: "center", gap: 20 }}>
-              <div style={{ flex: "none", width: 110, display: "flex", flexDirection: "column" }}>
-                <div style={{ fontSize: 15, fontWeight: 700 }}>¿Cómo vas?</div>
+              <div style={{ flex: "none", width: 170, display: "flex", alignItems: "center", gap: 12, paddingTop: 4 }}>
+                <Calentador nivel={hechos} />
+                <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.15 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#A8A29E", textTransform: "uppercase", letterSpacing: 0.6 }}>El calentador</span>
+                  <span style={{ fontSize: 16, fontWeight: 800, transition: "color 0.4s", color: TEMA_COLOR[Math.min(3, hechos)] }}>{TEMA[Math.min(3, hechos)]}</span>
+                </div>
               </div>
               <div style={{ flex: 1, minWidth: 0, position: "relative", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", alignItems: "center" }}>
                 <div style={{ position: "absolute", left: 16, right: 16, top: 14, height: 6, borderRadius: 3, background: C.soft2, overflow: "hidden" }}>
-                  <div style={{ height: "100%", borderRadius: 4, transition: "width 0.3s", width: [0, 33, 66, 100][Math.min(3, hechos)] + "%", background: hechos === 3 ? C.green : C.orange }} />
+                  <div style={{ height: "100%", borderRadius: 4, transition: "width 0.4s, background 0.4s", width: [0, 33, 66, 100][Math.min(3, hechos)] + "%", background: AGUA[Math.min(3, hechos)] }} />
                 </div>
                 {pasos.map((p, i) => {
                   const on = step === i + 1;
@@ -410,7 +441,7 @@ export default function Reparacion() {
                 })}
               </div>
               <div style={{ flex: "none", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                <div style={{ fontFamily: mono, fontSize: 20, fontWeight: 600, lineHeight: 1, color: hechos === 3 ? C.green : C.orangeDark }}>{hechos}/3</div>
+                <div style={{ fontFamily: mono, fontSize: 20, fontWeight: 600, lineHeight: 1, transition: "color 0.4s", color: TEMA_COLOR[Math.min(3, hechos)] }}>{hechos}/3</div>
               </div>
             </div>
 
@@ -505,10 +536,9 @@ export default function Reparacion() {
           <TopBar />
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
             <div style={{ ...card, boxShadow: "0 24px 48px -24px rgba(28,25,23,0.25)", padding: "44px 56px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, width: 560, textAlign: "center" }}>
-              <div style={{ width: 72, height: 72, borderRadius: "50%", background: C.greenSoft, color: C.green, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
-              </div>
+              <div style={{ paddingTop: 26 }}><Calentador nivel={3} k={2.2} /></div>
               <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.3 }}>{done.anthony ? "Turno enviado a Anthony" : "Turno terminado"}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#DC2626" }}>{done.anthony ? "Le pasaste el cliente a Anthony" : `¡Ese calentador quedó caliente, ${done.nombre}!`}{statsDone ? ` · ${statsDone.n} hoy · vas ${statsDone.pos}º` : ""}</div>
               <div style={{ fontSize: 15, color: C.faint }}>{done.txt}</div>
               <button type="button" onClick={volver} style={{ ...S.btn(C.ink), marginTop: 10, height: 56, padding: "0 28px" }}>Volver a la lista de espera</button>
               <div style={{ fontSize: 13, color: C.faint }}>Tu sesión se cierra sola en {Math.max(0, cuenta)} s · el próximo cliente pide PIN otra vez</div>
