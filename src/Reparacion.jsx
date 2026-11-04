@@ -72,7 +72,6 @@ export default function Reparacion() {
   const ninguna = opciones.find((p) => p.es_ninguna);
   const reales = opciones.filter((p) => !p.es_ninguna);
   const tieneNinguna = !!(ninguna && sel.includes(ninguna.id));
-  const siguiente = enEspera.find((t) => t.id !== turnoId);
   const posFila = (t) => enEspera.findIndex((x) => x.id === t.id) + 1;
 
   const limpiarTrabajo = () => { setStep(1); setSel([]); setRes(null); setCausa(null); setErr(""); setPop(null); setConfirmAnular(false); setNuevaPieza(null); setNuevaCausa(null); setAddMsg(""); setBusy(false); };
@@ -92,13 +91,18 @@ export default function Reparacion() {
   const confirmarPin = async () => {
     if (!emp) return setPinMsg("Primero escoge tu nombre");
     if (pin.length !== 3) return setPinMsg("Faltan dígitos: pon los 3 números");
+    if (busy) return;
+    setBusy(true);
     try {
       const rows = await rpc("verificar_pin", { p_pin: pin, p_rol: "reparacion" });
-      if (!rows || !rows.find((r) => r.id === emp.id)) { setPin(""); return setPinMsg("PIN incorrecto"); }
+      if (!rows || !rows.find((r) => r.id === emp.id)) { setPin(""); setBusy(false); return setPinMsg("PIN incorrecto"); }
       if (modoPin === "iniciar") await rpc("iniciar_turno", { p_turno: turnoId, p_empleado: emp.id });
       limpiarTrabajo(); setScreen("work"); recargar();
-    } catch (e) { setPinMsg(e.message); }
+    } catch (e) { setPinMsg(e.message); setPin(""); }
+    setBusy(false);
   };
+  // Con el tercer dígito entra solo (no hay que tocar "Empezar a reparar")
+  useEffect(() => { if (screen === "pin" && emp && pin.length === 3) confirmarPin(); }, [pin, emp]); // eslint-disable-line
 
   // ---------- Paso 1: piezas ----------
   const toggle = (p) => {
@@ -252,8 +256,9 @@ export default function Reparacion() {
                     <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.cliente_nombre}</span>
                     {t.nota && <span style={{ ...S.pill(C.moradoSoft, C.morado), fontWeight: 700 }}>Llamó antes</span>}
                   </div>
-                  <div style={{ fontSize: 14, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {nm(t.modelo_codigo)} · {proc ? "con " + titulo(t.atendido_por_nombre) : "Serie " + t.serial}{t.lugar_compra ? " · " + t.lugar_compra : ""}
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden" }}>
+                    <span style={{ flex: "none", fontSize: 18, fontWeight: 700, color: C.orangeDark }}>{nm(t.modelo_codigo)}</span>
+                    <span style={{ fontSize: 14, color: C.faint, overflow: "hidden", textOverflow: "ellipsis" }}>{proc ? "con " + titulo(t.atendido_por_nombre) : "Serie " + t.serial}{t.lugar_compra ? " · " + t.lugar_compra : ""}</span>
                   </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -311,7 +316,7 @@ export default function Reparacion() {
                     <span style={{ flex: "none", fontSize: 15, fontWeight: 700, color: "#fff", background: C.orange, padding: "5px 12px", borderRadius: 10 }}>{modoPin === "iniciar" ? posFila(turnoPin) + "º en fila" : "Reparando"}</span>
                     <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{turnoPin.cliente_nombre}</span>
                   </div>
-                  <div style={{ fontSize: 15, color: C.faint }}>{nm(turnoPin.modelo_codigo)} · Serie <span style={{ fontFamily: mono, color: C.ink }}>{turnoPin.serial}</span> · esperando {minDesde(turnoPin.created_at, now)} min</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><span style={{ fontSize: 19, fontWeight: 700, color: C.orangeDark }}>{nm(turnoPin.modelo_codigo)}</span><span style={{ fontSize: 15, color: C.faint }}>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turnoPin.serial}</span> · esperando {minDesde(turnoPin.created_at, now)} min</span></div>
                 </div>
                 <button type="button" onClick={volver} aria-label="Cerrar" style={{ flex: "none", width: 44, height: 44, borderRadius: 22, border: `1px solid ${C.line2}`, background: "#fff", color: C.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
@@ -333,10 +338,10 @@ export default function Reparacion() {
             <div style={{ background: C.soft, borderLeft: `1px solid ${C.soft2}`, padding: "28px 24px", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 20, fontWeight: 700 }}>{emp ? "Hola, " + emp.nombre : "Escoge tu nombre"}</div>
-                <div style={{ fontSize: 13, color: C.faint, marginTop: 4 }}>{emp ? "Los mismos 3 dígitos que usas para ponchar" : "Toca tu nombre a la izquierda"}</div>
+                <div style={{ fontSize: 13, color: C.faint, marginTop: 4 }}>{emp ? "Los mismos 3 dígitos que usas para ponchar · entra solo" : "Toca tu nombre a la izquierda"}</div>
               </div>
               <div style={{ fontSize: 13, fontWeight: 600, color: C.red, minHeight: 18 }}>{pinMsg}</div>
-              <PinPad pin={pin} setPin={(v) => { setPin(v); setPinMsg(""); }} onOk={confirmarPin} ready={emp && pin.length === 3} okLabel={modoPin === "iniciar" ? "Empezar a reparar" : "Continuar"} />
+              <PinPad pin={pin} setPin={(v) => { setPin(v); setPinMsg(""); }} onOk={confirmarPin} ready={emp && pin.length === 3} okLabel={busy ? "Entrando..." : modoPin === "iniciar" ? "Empezar a reparar" : "Continuar"} />
             </div>
           </div>
         </div>
@@ -353,10 +358,26 @@ export default function Reparacion() {
                   <span style={{ flex: "none", fontSize: 15, fontWeight: 700, color: C.orangeDark, background: C.orangeSoft, border: "1px solid #E7CBA9", padding: "4px 12px", borderRadius: 10 }}>Reparando</span>
                   <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{turno.cliente_nombre}</span>
                 </div>
-                <div style={{ fontSize: 15, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nm(turno.modelo_codigo)} · Serie <span style={{ fontFamily: mono, color: C.ink }}>{turno.serial}</span>{turno.lugar_compra ? " · Compró en " + turno.lugar_compra : ""}</div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden" }}>
+                  <span style={{ flex: "none", fontSize: 22, fontWeight: 700, color: C.orangeDark }}>{nm(turno.modelo_codigo)}</span>
+                  <span style={{ fontSize: 15, color: C.faint, overflow: "hidden", textOverflow: "ellipsis" }}>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turno.serial}</span>{turno.lugar_compra ? " · Compró en " + turno.lugar_compra : ""}</span>
+                </div>
               </div>
               {turno.nota && <button type="button" onClick={() => setPop(pop === "llamada" ? null : "llamada")} style={chipTop(pop === "llamada", C.morado, C.moradoSoft)}>Llamó antes</button>}
               <button type="button" onClick={() => setPop(pop === "cliente" ? null : "cliente")} style={chipTop(pop === "cliente", C.ink2, "#fff")}>Datos del cliente</button>
+              <button type="button" onClick={devolver} style={{ flex: "none", height: 52, padding: "0 16px", borderRadius: 14, display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", lineHeight: 1.15, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2 }}>
+                <span style={{ fontSize: 15, fontWeight: 700 }}>Devolver</span><span style={{ fontSize: 12, color: C.faint }}>a la lista de espera</span>
+              </button>
+              {confirmAnular ? (
+                <>
+                  <button type="button" onClick={anular} style={{ flex: "none", height: 52, padding: "0 16px", borderRadius: 14, border: "none", background: C.red, color: "#fff", fontSize: 15, fontWeight: 700 }}>Sí, anular</button>
+                  <button type="button" onClick={() => setConfirmAnular(false)} style={{ flex: "none", height: 52, padding: "0 14px", borderRadius: 14, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 15, fontWeight: 600 }}>No</button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setConfirmAnular(true)} style={{ flex: "none", height: 52, padding: "0 16px", borderRadius: 14, display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", lineHeight: 1.15, border: "1px solid #F3C4C4", background: "#fff", color: C.red }}>
+                  <span style={{ fontSize: 15, fontWeight: 700 }}>Anular turno</span><span style={{ fontSize: 12, opacity: 0.8 }}>el cliente se fue</span>
+                </button>
+              )}
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", paddingLeft: 20, marginLeft: 4, borderLeft: `1px solid ${C.line}`, flex: "none" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#A8A29E", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Tiempo reparando</div>
                 <div style={{ fontFamily: mono, fontSize: 30, fontWeight: 600, lineHeight: 1, letterSpacing: -0.5 }}>{minDesde(turno.iniciado_at, now)} min</div>
@@ -377,34 +398,56 @@ export default function Reparacion() {
               )}
             </div>
 
-            <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 16 }}>
-              <div style={{ ...card, display: "flex", flexDirection: "column", minHeight: 0, padding: "18px 20px", gap: 16 }}>
-                <div style={{ flex: "none", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
-                  {pasos.map((p, i) => {
-                    const on = step === i + 1;
-                    return (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 12, minWidth: 0, ...(on ? { background: C.orangeSoft, border: `2px solid ${C.orange}` } : p.ok ? { background: "#F4FBF6", border: "2px solid #BFE3CB" } : { background: C.soft, border: `2px solid ${C.line}` }) }}>
-                        <span style={{ flex: "none", width: 32, height: 32, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 16, ...(on ? { background: C.orange, color: "#fff" } : p.ok ? { background: C.green, color: "#fff" } : { background: C.line2, color: C.faint }) }}>{p.ok && !on ? "✓" : i + 1}</span>
-                        <span style={{ fontSize: 17, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: on ? C.orangeDark : p.ok ? C.greenDark : C.faint }}>{p.label}</span>
-                      </div>
-                    );
-                  })}
+            {/* ¿Cómo vas? arriba, en horizontal */}
+            <div style={{ ...card, borderRadius: 16, flex: "none", padding: "8px 20px", display: "flex", alignItems: "center", gap: 20 }}>
+              <div style={{ flex: "none", width: 170, display: "flex", flexDirection: "column" }}>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>¿Cómo vas?</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: hechos === 3 ? C.green : C.orangeDark }}>{hechos === 3 && noQuiso ? "Todo listo, dale a Enviar" : ANIMO[hechos]}</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 0, position: "relative", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", alignItems: "center" }}>
+                <div style={{ position: "absolute", left: 16, right: 16, top: 14, height: 6, borderRadius: 3, background: C.soft2, overflow: "hidden" }}>
+                  <div style={{ height: "100%", borderRadius: 4, transition: "width 0.3s", width: [0, 33, 66, 100][Math.min(3, hechos)] + "%", background: hechos === 3 ? C.green : C.orange }} />
                 </div>
+                {pasos.map((p, i) => {
+                  const on = step === i + 1;
+                  const hecho = p.ok && !on;
+                  return (
+                    <div key={i} style={{ position: "relative", display: "flex", alignItems: "center", gap: 10, minWidth: 0, paddingRight: 10 }}>
+                      <span style={{ flex: "none", position: "relative", zIndex: 1, width: 34, height: 34, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, boxSizing: "border-box",
+                        ...(hecho ? { background: C.green, color: "#fff", boxShadow: "0 8px 16px -8px rgba(21,128,61,0.7)" } : on ? { background: C.orange, color: "#fff", boxShadow: `0 0 0 4px ${C.orangeSoft}, 0 8px 16px -8px rgba(180,83,9,0.8)` } : { background: "#fff", border: `2px solid ${C.line2}`, color: "#A8A29E" }) }}>{hecho ? "✓" : i + 1}</span>
+                      <span style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "#fff", padding: "0 10px 0 2px" }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: on ? C.orange : p.ok ? C.green : "#A8A29E" }}>{p.label}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: p.ok || on ? C.ink : "#A8A29E" }}>{p.ok ? p.val : on ? "Ahora" : "Pendiente"}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ flex: "none", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                <div style={{ fontFamily: mono, fontSize: 20, fontWeight: 600, lineHeight: 1, color: hechos === 3 ? C.green : C.orangeDark }}>{hechos}/3</div>
+                <div style={{ fontSize: 11, color: "#A8A29E" }}>pasos</div>
+              </div>
+            </div>
+
+            {/* Área de trabajo a todo lo ancho */}
+            <div style={{ ...card, flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: "20px 24px 18px", gap: 16 }}>
 
                 <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
-                  <div style={{ flex: "none", display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.4 }}>{pregunta}</div>
-                    <div style={{ fontSize: 17, color: C.muted }}>{ayuda}</div>
+                  <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 28 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                      <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.4 }}>{pregunta}</div>
+                      <div style={{ fontSize: 17, color: C.muted }}>{ayuda}</div>
+                    </div>
+                    {step === 1 && !sinCat && ninguna && (
+                      <button type="button" onClick={() => toggle(ninguna)} style={{ flex: "none", width: 420, maxWidth: "48%", height: 66, padding: "0 22px", borderRadius: 14, fontSize: 18, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, ...opcion(tieneNinguna) }}>
+                        <span style={{ whiteSpace: "nowrap" }}>Ninguna pieza estaba dañada</span>
+                        <span style={{ flex: "none", fontSize: 14, fontWeight: 600, padding: "4px 12px", borderRadius: 12, ...(tieneNinguna ? { background: C.orange, color: "#fff" } : { background: C.soft2, color: C.faint }) }}>Orientación</span>
+                      </button>
+                    )}
                   </div>
 
                   {step === 1 && !sinCat && (
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-                      {ninguna && (
-                        <button type="button" onClick={() => toggle(ninguna)} style={{ gridColumn: "1 / -1", height: 66, padding: "0 22px", borderRadius: 14, fontSize: 18, display: "flex", alignItems: "center", justifyContent: "space-between", ...opcion(tieneNinguna) }}>
-                          <span>Ninguna pieza estaba dañada</span>
-                          <span style={{ fontSize: 14, fontWeight: 600, padding: "4px 12px", borderRadius: 12, ...(tieneNinguna ? { background: C.orange, color: "#fff" } : { background: C.soft2, color: C.faint }) }}>Orientación</span>
-                        </button>
-                      )}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
                       {reales.map((p) => <button key={p.id} type="button" onClick={() => toggle(p)} style={{ height: 66, borderRadius: 14, fontSize: 18, padding: "0 10px", ...opcion(sel.includes(p.id)) }}>{p.nombre}</button>)}
                       {nuevaPieza === null && <button type="button" onClick={() => { setNuevaPieza(""); setAddMsg(""); }} style={{ height: 66, borderRadius: 14, border: "2px dashed #D9B48A", background: "#FFFCF7", color: C.orangeDark, fontSize: 18, fontWeight: 700 }}>+ Otra pieza</button>}
                     </div>
@@ -458,55 +501,6 @@ export default function Reparacion() {
                     {avanzarTxt}{flecha("m9 18 6-6-6-6")}
                   </button>
                 </div>
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
-                <div style={{ ...card, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                    <div style={{ fontSize: 20, fontWeight: 700 }}>¿Cómo vas?</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: C.muted }}>{hechos} de 3 pasos</div>
-                  </div>
-                  <div style={{ height: 14, borderRadius: 7, background: C.soft2, overflow: "hidden" }}>
-                    <div style={{ height: "100%", borderRadius: 7, transition: "width 0.3s", width: Math.round(hechos / 3 * 100) + "%", background: hechos === 3 ? C.green : C.orange }} />
-                  </div>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: hechos === 3 ? C.green : C.orangeDark }}>{hechos === 3 && noQuiso ? "Todo listo, dale a Enviar" : ANIMO[hechos]}</div>
-                  {pasos.map((p, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 0", borderTop: `1px solid ${C.soft2}` }}>
-                      <span style={{ flex: "none", width: 30, height: 30, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, ...(p.ok ? { background: C.green, color: "#fff" } : { background: C.soft2, color: "#A8A29E" }) }}>{p.ok ? "✓" : i + 1}</span>
-                      <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-                        <span style={{ fontSize: 14, color: C.faint }}>Paso {i + 1} · {p.label}</span>
-                        <span style={{ fontSize: 17, fontWeight: 700, color: p.ok ? C.ink : "#A8A29E", overflow: "hidden", textOverflow: "ellipsis" }}>{p.ok ? p.val : "Pendiente"}</span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-
-                {siguiente && (
-                  <div style={{ ...card, boxShadow: "0 18px 40px -30px rgba(28,25,23,0.3)", padding: "16px 20px", display: "flex", alignItems: "center", gap: 12 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={S.cap}>Próximo</div>
-                      <div style={{ fontSize: 17, fontWeight: 700, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{siguiente.cliente_nombre}</div>
-                      <div style={{ fontSize: 14, color: C.faint }}>{nm(siguiente.modelo_codigo)} · {posFila(siguiente)}º en fila</div>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                      <div style={{ fontFamily: mono, fontSize: 20, fontWeight: 600, color: C.orangeDark, lineHeight: 1 }}>{minDesde(siguiente.created_at, now)} min</div>
-                      <div style={{ fontSize: 11, color: "#A8A29E", marginTop: 3 }}>esperando</div>
-                    </div>
-                  </div>
-                )}
-
-                <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-                  <button type="button" onClick={devolver} style={{ height: 54, borderRadius: 14, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 16, fontWeight: 600 }}>Devolver a la lista de espera</button>
-                  {confirmAnular ? (
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button type="button" onClick={anular} style={{ flex: 1, height: 54, borderRadius: 14, border: "none", background: C.red, color: "#fff", fontSize: 16, fontWeight: 700 }}>Sí, anular</button>
-                      <button type="button" onClick={() => setConfirmAnular(false)} style={{ height: 54, padding: "0 18px", borderRadius: 14, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 16, fontWeight: 600 }}>No</button>
-                    </div>
-                  ) : (
-                    <button type="button" onClick={() => setConfirmAnular(true)} style={{ height: 54, borderRadius: 14, border: "1px solid #F3C4C4", background: "#fff", color: C.red, fontSize: 16, fontWeight: 700 }}>Anular turno (cliente se fue)</button>
-                  )}
-                </div>
-              </div>
             </div>
           </div>
         </>
