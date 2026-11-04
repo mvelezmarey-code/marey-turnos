@@ -16,6 +16,17 @@ const desdeFiltro = (k) => {
   return d.toISOString();
 };
 const MAX_FILA = 4;
+// Mensaje de garantía para copiar y pegar (botón arriba en la barra)
+const GARANTIA = "GARANTÍA OPEN BOX: Equipos con empaque abierto, inspeccionados y certificados en perfecto estado técnico, vendidos con descuento comercial. Incluyen 2 años de garantía en piezas y 1 año en servicio en centros autorizados. Cubre únicamente defectos internos de fábrica. No cubre detalles estéticos preexistentes, mala instalación, fluctuaciones de voltaje, exposición directa a la lluvia ni daños por sedimentos. Se aceptan devoluciones dentro de los primeros 7 días laborables.";
+const copiarTexto = async (t) => {
+  try { await navigator.clipboard.writeText(t); return true; } catch (e) {
+    // Plan B para navegadores que no dejan usar el portapapeles directo
+    const ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+    document.body.removeChild(ta); return ok;
+  }
+};
 const norm = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
 // Campo que se puede escribir o escoger de la lista (pueblo, modelo)
@@ -97,6 +108,7 @@ export default function Recepcion() {
   const [anularId, setAnularId] = useState(null);
   const [verHist, setVerHist] = useState(true);
   const [ventaMsg, setVentaMsg] = useState(null);
+  const [copiado, setCopiado] = useState(null); // null | "ok" | "error"
   // Decisión de Anthony: con qué se fue el cliente que no quiso reparar
   const [elegida, setElegida] = useState(null);
   const [razon, setRazon] = useState(null);
@@ -254,6 +266,9 @@ export default function Recepcion() {
   };
   const pickSalida = (n) => { if (n === "Ninguno") { setElegida("Ninguno"); setRazon(null); setOtro(""); } else decidir(n); };
 
+  const copiarGarantia = async () => { setCopiado((await copiarTexto(GARANTIA)) ? "ok" : "error"); };
+  useEffect(() => { if (!copiado) return; const t = setTimeout(() => setCopiado(null), 2500); return () => clearTimeout(t); }, [copiado]);
+
   useEffect(() => { if (!ventaMsg) return; const t = setTimeout(() => setVentaMsg(null), 4000); return () => clearTimeout(t); }, [ventaMsg]);
 
   const hint = !ok ? `Falta: ${faltan.join(", ")}`
@@ -271,6 +286,13 @@ export default function Recepcion() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.bg, overflow: "hidden" }}>
       <Header subtitulo="Computadora de recepción">
+        <button type="button" onClick={copiarGarantia} title="Copia el mensaje de garantía Open Box para pegarlo"
+          style={{ height: 34, padding: "0 14px", borderRadius: 17, border: `1px solid ${copiado === "ok" ? "#86C59B" : "#57534E"}`, background: copiado === "ok" ? C.green : "transparent", color: "#FAFAF9", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, transition: "background 0.2s" }}>
+          {copiado === "ok"
+            ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+            : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+          {copiado === "ok" ? "¡Copiado! Pégalo con Ctrl+V" : copiado === "error" ? "No se pudo copiar" : "Mensaje de garantía"}
+        </button>
         <button type="button" onClick={() => setBuscar(true)} style={{ height: 34, padding: "0 14px", borderRadius: 17, border: "1px solid #57534E", background: "transparent", color: "#FAFAF9", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
           Buscar cliente
