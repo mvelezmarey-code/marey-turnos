@@ -50,13 +50,13 @@ export function useCatalogos() {
   return { empleados, modelos, piezas, causas, cargarPiezas, cargarCausas };
 }
 
-// ---------- Turnos abiertos + de hoy, con realtime ----------
+// ---------- Turnos abiertos (espera, en proceso y esperando decisión de Anthony) + de hoy, con realtime ----------
 export function useTurnos() {
   const [abiertos, setAbiertos] = useState([]);
   const [hoy, setHoy] = useState([]);
   const cargar = useCallback(async () => {
     const [a, h] = await Promise.all([
-      supabase.from("turnos_completos").select("*").in("status", ["espera", "en_proceso"]).order("created_at"),
+      supabase.from("turnos_completos").select("*").in("status", ["espera", "en_proceso", "decision"]).order("created_at"),
       supabase.from("turnos_completos").select("*").eq("fecha", hoyPR()).in("status", ["terminado", "anulado"]).order("terminado_at", { ascending: false }),
     ]);
     if (a.data) setAbiertos(a.data);
@@ -118,6 +118,12 @@ export const DESC_RESULTADO = {
   "Cliente no quiso reparar": "Se le explicó y decidió no hacerlo",
   [SIN_PIEZA]: "No había nada roto: se le explicó al cliente",
 };
+export const SALIDAS = [
+  { n: "Remanufacturado", d: "Se llevó uno remanufacturado" },
+  { n: "Nuevo", d: "Compró uno nuevo" },
+  { n: "Ninguno", d: "Se fue sin calentador" },
+];
+export const RAZONES_NINGUNO = ["Muy caro", "Lo va a pensar", "Lo arregla por su cuenta", "Va a comprar en otro sitio", "Otro"];
 export const LUGARES_COMPRA = ["Home Depot", "Walmart", "Costco", "Ferretería", "Marey directo", "Otro"];
 
 // ---------- Estilos base (premium) ----------
