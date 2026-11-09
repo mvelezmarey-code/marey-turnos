@@ -4,7 +4,7 @@ import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, useNow, useC
 import { Header, Leaderboard, Expediente, BuscadorExpediente, Modal } from "./components.jsx";
 import { catalogoLlamadas, llamadasPorTelefono, llamadasDesde, registrarLlamada, estadoLlamada, esCitado, RESULTADOS_LLAMADA, MORADO } from "./llamadas.js";
 
-const vacio = { nombre: "", telefono: "", pueblo: "", modelo: "", serial: "", compra: "" };
+const vacio = { nombre: "", telefono: "", pueblo: "", modelo: "", compra: "" };
 const vacioL = { municipio_id: "", modelo_id: "", antiguedad_id: "", problema: "" };
 const fechaCorta = (ts) => new Date(ts).toLocaleDateString("es-PR", { timeZone: "America/Puerto_Rico", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const desdeFiltro = (k) => {
@@ -186,7 +186,6 @@ export default function Recepcion() {
   if (tel.length !== 10) faltan.push("teléfono (10 dígitos)");
   if (!f.pueblo.trim()) faltan.push("pueblo");
   if (!f.modelo) faltan.push("modelo");
-  if (f.serial.length !== 11) faltan.push("serie de 11 dígitos");
   if (!f.compra) faltan.push("dónde lo compró");
   const ok = faltan.length === 0 && regId;
   const regNombre = (registradores.find((r) => r.id === regId) || {}).nombre || "";
@@ -228,7 +227,7 @@ export default function Recepcion() {
     try {
       const t = await rpc("crear_turno", {
         p_tipo: "ventanilla", p_registrado_por: regId, p_nombre: f.nombre, p_telefono: tel, p_pueblo: f.pueblo,
-        p_modelo: f.modelo, p_serial: f.serial, p_busca: null, p_tipo_cliente: null,
+        p_modelo: f.modelo, p_serial: null, p_busca: null, p_tipo_cliente: null,
         p_nota: notaLlamada(), p_atender_ahora: false, p_lugar_compra: f.compra,
       });
       setMsg({ ok: true, t: `Turno ${t.numero} creado para ${f.nombre.trim()}.` + (citado ? " Llegó a tienda (citado por teléfono)." : "") });
@@ -384,15 +383,8 @@ export default function Recepcion() {
             </>
           ) : (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-                <div style={S.label}>Modelo
-                  <Combo items={modelosCombo} valueId={f.modelo} onPick={(id) => setF((p) => ({ ...p, modelo: id }))} label="Modelo" />
-                </div>
-                <label style={S.label}>
-                  <span style={{ display: "flex", justifyContent: "space-between" }}><span>Serie</span><span style={{ color: f.serial.length === 11 ? C.green : C.faint }}>{f.serial.length}/11</span></span>
-                  <input inputMode="numeric" maxLength={11} value={f.serial} onChange={(e) => setF({ ...f, serial: soloDigitos(e.target.value).slice(0, 11) })}
-                    style={{ ...S.input, fontFamily: mono, fontWeight: 600, letterSpacing: 1, ...(f.serial.length === 11 ? { borderColor: "#86C59B", background: "#F4FBF6" } : {}) }} />
-                </label>
+              <div style={S.label}>Modelo
+                <Combo items={modelosCombo} valueId={f.modelo} onPick={(id) => setF((p) => ({ ...p, modelo: id }))} label="Modelo" />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={S.cap}>¿Dónde lo compró?</div>
@@ -485,7 +477,7 @@ export default function Recepcion() {
                       <div style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: C.orange, width: 46, flex: "none" }}>{t.numero}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 15, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.cliente_nombre}</div>
-                        <div style={{ fontSize: 12, color: C.faint }}>{nm(t.modelo_codigo)} · {t.serial}</div>
+                        <div style={{ fontSize: 12, color: C.faint }}>{nm(t.modelo_codigo)}{t.serial ? " · " + t.serial : ""}</div>
                       </div>
                       <span style={S.pill(proc ? C.orangeSoft : C.soft2, proc ? C.orangeDark : C.ink2)}>{proc ? titulo(t.atendido_por_nombre) + " · " + fmtMMSS(now - new Date(t.iniciado_at)) : "Espera " + fmtMMSS(now - new Date(t.created_at))}</span>
                       {anularId !== t.id && <button type="button" onClick={() => setAnularId(t.id)} style={{ flex: "none", height: 32, padding: "0 10px", borderRadius: 16, border: `1px solid ${C.line2}`, background: "#fff", color: C.red, fontSize: 12, fontWeight: 700 }}>Anular</button>}
