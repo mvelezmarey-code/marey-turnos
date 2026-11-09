@@ -124,7 +124,7 @@ export const SALIDAS = [
   { n: "Ninguno", d: "Se fue sin calentador" },
 ];
 export const RAZONES_NINGUNO = ["Muy caro", "Lo va a pensar", "Lo arregla por su cuenta", "Va a comprar en otro sitio", "Otro"];
-export const LUGARES_COMPRA = ["Home Depot", "Walmart", "Costco", "Ferretería", "Marey directo", "Otro"];
+export const LUGARES_COMPRA = ["Ferretería", "National", "Home Depot", "Walmart", "Marey directo", "Otro"];
 
 // ---------- Estilos base (premium) ----------
 const sombra = "0 1px 2px rgba(28,25,23,0.04), 0 12px 32px -20px rgba(28,25,23,0.18)";
