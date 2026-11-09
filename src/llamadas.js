@@ -19,6 +19,55 @@ export const llamadasPorTelefono = (tel) => call("turnos_llamadas_por_telefono",
 export const llamadasDesde = (desde) => call("turnos_llamadas_desde", { p_desde: desde });
 export const registrarLlamada = (args) => call("turnos_registrar_llamada", args);
 
+// ---------- Llamadas perdidas / voicemail (cola "Por devolver") ----------
+export async function perdidasAbiertas() {
+  const { data, error } = await llamadasDb.from("v_llamadas_perdidas").select("*").neq("estado", "cerrada").order("ultima_llamada", { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+export async function perdidasCerradas(dias = 7) {
+  const desde = new Date(Date.now() - dias * 86400000).toISOString();
+  const { data, error } = await llamadasDb.from("v_llamadas_perdidas").select("*").eq("estado", "cerrada").gte("cerrada_at", desde).order("cerrada_at", { ascending: false }).limit(100);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+export const perdidaTomar = (id, quien) => call("turnos_perdida_tomar", { p_id: id, p_quien: quien });
+export const perdidaSoltar = (id) => call("turnos_perdida_soltar", { p_id: id });
+export const perdidaNoContesto = (id, quien) => call("turnos_perdida_no_contesto", { p_id: id, p_quien: quien });
+export const perdidaCerrar = (id, resultado, quien, llamadaId = null) => call("turnos_perdida_cerrar", { p_id: id, p_resultado: resultado, p_quien: quien, p_llamada: llamadaId });
+export const metricasPerdidas = (desde, hasta) => call("metricas_llamadas_perdidas", { p_desde: desde, p_hasta: hasta }).then((d) => (Array.isArray(d) ? d[0] : d));
+export const metricasPerdidasPorAgente = (desde, hasta) => call("metricas_llamadas_perdidas_por_agente", { p_desde: desde, p_hasta: hasta });
+export async function urlVoicemail(path) {
+  const { data } = await llamadasDb.storage.from("voicemails").createSignedUrl(path, 3600);
+  return data ? data.signedUrl : null;
+}
+// Suscripcion en vivo: onNueva(fila) cuando entra una perdida o el mismo numero vuelve a llamar; onCambio() en cualquier cambio
+export function suscribirPerdidas(onNueva, onCambio) {
+  const ch = llamadasDb.channel("turnos_perdidas_rt")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "llamadas_perdidas" }, (p) => { onNueva(p.new, "nueva"); onCambio(); })
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "llamadas_perdidas" }, (p) => {
+      if (p.new.estado !== "cerrada" && p.old && p.new.veces > (p.old.veces || 0)) onNueva(p.new, "repite");
+      onCambio();
+    })
+    .subscribe();
+  return () => llamadasDb.removeChannel(ch);
+}
+export const fmtTel = (t) => { const d = String(t || "").replace(/\D/g, "").replace(/^1(\d{10})$/, "$1"); return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : (t || ""); };
+export const hace = (iso) => {
+  const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (m < 1) return "ahora"; if (m < 60) return `hace ${m} min`;
+  const h = Math.floor(m / 60); if (h < 24) return `hace ${h} h`;
+  return `hace ${Math.floor(h / 24)} d`;
+};
+// Aviso corto de dos tonos, sin archivos
+export function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const tono = (f, t0, dur) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = "sine"; o.frequency.value = f; g.gain.value = 0.0001; o.connect(g); g.connect(ctx.destination); o.start(t0); g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur); o.stop(t0 + dur + 0.05); };
+    tono(880, ctx.currentTime, 0.18); tono(1175, ctx.currentTime + 0.2, 0.25);
+  } catch (e) { /* sin audio */ }
+}
+
 // Status de MareyApp: mismos colores que esa app
 export const STATUS_LLAMADA = {
   dirigido: { t: "Dirigido", c: "#0F6E56", b: "#E1F5EE" },
