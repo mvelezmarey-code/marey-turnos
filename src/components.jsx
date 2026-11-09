@@ -139,7 +139,7 @@ export function Expediente({ q }) {
             <div key={e._k} style={{ display: "flex", gap: 12, padding: "12px 20px", borderTop: `1px solid ${C.soft2}`, alignItems: "flex-start" }}>
               <span style={{ flex: "none", width: 96, textAlign: "center", fontSize: 12, fontWeight: 700, padding: "4px 0", borderRadius: 8, color: rep ? C.orangeDark : C.blueDark, background: rep ? C.orangeSoft : C.blueSoft }}>{rep ? "Reparación" : "Venta"}</span>
               <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{rep ? `${e.modelo_codigo} · Serie ${e.serial}` : `Venta · ${e.busca}`}</div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{rep ? `${e.modelo_codigo}${e.serial ? " · Serie " + e.serial : ""}` : `Venta · ${e.busca}`}</div>
                 <div style={{ fontSize: 13, color: C.muted }}>{rep ? [e.piezas || "—", e.causa ? "Causa: " + e.causa : null, e.lugar_compra ? "Compró en " + e.lugar_compra : null].filter(Boolean).join(" · ") : e.tipo_cliente}</div>
                 <div style={{ fontSize: 12, color: C.faint }}>{e.numero}{e.atendido_por ? " · Atendió: " + titulo(e.atendido_por) : ""}</div>
               </div>
