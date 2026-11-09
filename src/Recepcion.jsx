@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
 import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA, SALIDAS, RAZONES_NINGUNO } from "./lib.js";
 import { Header, Leaderboard, Expediente, BuscadorExpediente, Modal } from "./components.jsx";
-import { catalogoLlamadas, llamadasPorTelefono, llamadasDesde, registrarLlamada, estadoLlamada, esCitado, RESULTADOS_LLAMADA, MORADO } from "./llamadas.js";
+import { catalogoLlamadas, llamadasPorTelefono, llamadasDesde, registrarLlamada, estadoLlamada, esCitado, RESULTADOS_LLAMADA, MORADO,
+  perdidasAbiertas, perdidasCerradas, perdidaTomar, perdidaSoltar, perdidaNoContesto, perdidaCerrar, suscribirPerdidas, urlVoicemail, fmtTel, hace, beep } from "./llamadas.js";
 
 const vacio = { nombre: "", telefono: "", pueblo: "", modelo: "", compra: "" };
 const vacioL = { municipio_id: "", modelo_id: "", antiguedad_id: "", problema: "" };
@@ -130,6 +131,22 @@ export default function Recepcion() {
   const cargarLista = () => llamadasDesde(desdeFiltro(filtro)).then((d) => setLista(d || [])).catch(() => setLista([]));
   useEffect(() => { if (bit === "llamadas") cargarLista(); }, [bit, filtro]); // eslint-disable-line
 
+  // ---------- Llamadas perdidas / voicemail (MareyApp) ----------
+  const [perdidas, setPerdidas] = useState([]);
+  const [perdidasCerr, setPerdidasCerr] = useState([]);
+  const [devolviendo, setDevolviendo] = useState(null); // perdida que se esta devolviendo
+  const [aviso, setAviso] = useState(null);
+  const [audios, setAudios] = useState({});
+  const cargarPerdidas = () => { perdidasAbiertas().then(setPerdidas).catch(() => {}); perdidasCerradas(7).then(setPerdidasCerr).catch(() => {}); };
+  useEffect(() => {
+    cargarPerdidas();
+    const off = suscribirPerdidas((fila, tipoAviso) => { setAviso({ ...fila, tipoAviso }); beep(); }, cargarPerdidas);
+    const iv = setInterval(cargarPerdidas, 60000);
+    return () => { off(); clearInterval(iv); };
+  }, []);
+  useEffect(() => { if (!aviso) return; const t = setTimeout(() => setAviso(null), 25000); return () => clearTimeout(t); }, [aviso]);
+  const escucharVm = async (p) => { if (audios[p.id] || !p.voicemail_url) return; const u = await urlVoicemail(p.voicemail_url); if (u) setAudios((a) => ({ ...a, [p.id]: u })); };
+
   // Pueblo: un solo dropdown (lista de MareyApp) para Reparación y Llamada
   const escogerPueblo = (id) => {
     const m = cat.municipios.find((x) => String(x.id) === String(id));
@@ -197,16 +214,28 @@ export default function Recepcion() {
   const okL = faltanL.length === 0 && !!regNombre;
   const sinUsuarioLl = regNombre && cat.usuarios.length > 0 && !cat.usuarios.some((u) => u.nombre.toLowerCase() === regNombre.toLowerCase());
 
-  const limpiar = () => { setF(vacio); setFl(vacioL); setHist([]); setCliente(null); };
+  const limpiar = () => { setF(vacio); setFl(vacioL); setHist([]); setCliente(null); setDevolviendo(null); };
+
+  // Devolver una llamada perdida: abre el formulario de llamada con el telefono puesto
+  const devolver = (p) => {
+    setDevolviendo(p); setTipo("llamada"); setBit("perdidas");
+    setF({ ...vacio, telefono: fmtTel(p.telefono) }); setFl(vacioL); setCliente(null);
+    if (p.estado === "abierta" && regNombre) perdidaTomar(p.id, regNombre).then(cargarPerdidas).catch(() => {});
+  };
+  const accionPerdida = async (fn) => { try { await fn(); } catch (e) { setLlMsg({ ok: false, t: e.message }); } cargarPerdidas(); };
 
   const guardarLlamada = async (r) => {
     if (!okL || busy) return;
     setBusy(true); setLlMsg(null);
     try {
-      await registrarLlamada({ p_registra: regNombre, p_nombre: f.nombre, p_telefono: tel, p_municipio_id: Number(fl.municipio_id), p_modelo_id: Number(fl.modelo_id),
+      const res = await registrarLlamada({ p_registra: regNombre, p_nombre: f.nombre, p_telefono: tel, p_municipio_id: Number(fl.municipio_id), p_modelo_id: Number(fl.modelo_id),
         p_antiguedad_id: fl.antiguedad_id ? Number(fl.antiguedad_id) : null, p_problema: fl.problema, p_status: r.status, p_centro: r.centro });
-      setLlMsg({ ok: true, t: `Llamada de ${f.nombre.trim()} guardada en MareyApp · ${r.label}.` });
-      limpiar(); setBit("llamadas"); cargarLista();
+      // si venia de una llamada perdida, se cierra como devuelta y queda enlazada
+      const idL = typeof res === "string" ? res : (res && (res.id || (Array.isArray(res) && res[0] && res[0].id))) || null;
+      const dv = devolviendo;
+      if (dv) { try { await perdidaCerrar(dv.id, "contestada", regNombre, idL); } catch (_) { /* no bloquea el guardado */ } }
+      setLlMsg({ ok: true, t: dv ? `Llamada devuelta a ${f.nombre.trim()} · ${r.label}.` : `Llamada de ${f.nombre.trim()} guardada en MareyApp · ${r.label}.` });
+      limpiar(); setBit(dv ? "perdidas" : "llamadas"); cargarLista(); cargarPerdidas();
     } catch (e) { setLlMsg({ ok: false, t: e.message }); }
     setBusy(false);
   };
@@ -288,6 +317,13 @@ export default function Recepcion() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.bg, overflow: "hidden" }}>
       <Header subtitulo="Computadora de recepción">
+        {aviso && (
+          <button type="button" onClick={() => { setBit("perdidas"); setAviso(null); }}
+            style={{ height: 34, padding: "0 12px 0 10px", borderRadius: 17, border: "none", background: C.red, color: "#fff", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ ...S.dot("#fff") }} />
+            {aviso.tiene_voicemail ? "Voicemail" : aviso.tipoAviso === "repite" ? `Volvió a llamar (${aviso.veces})` : "Llamada perdida"} · {fmtTel(aviso.telefono)} · Ver
+          </button>
+        )}
         {GARANTIAS.map((g) => {
           const est = copiado && copiado.k === g.k ? (copiado.ok ? "ok" : "error") : null;
           return (
@@ -319,6 +355,12 @@ export default function Recepcion() {
             </label>
           </div>
 
+          {devolviendo && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderRadius: 10, background: C.redSoft, color: C.redDark, fontSize: 13, fontWeight: 600, flex: "none" }}>
+              <span>Devolviendo llamada perdida · {fmtTel(devolviendo.telefono)}{devolviendo.veces > 1 ? ` · llamó ${devolviendo.veces} veces` : ""}</span>
+              <button type="button" onClick={() => { setDevolviendo(null); setF(vacio); setFl(vacioL); }} style={{ border: "none", background: "transparent", color: C.redDark, fontSize: 12, fontWeight: 700, textDecoration: "underline" }}>Cancelar</button>
+            </div>
+          )}
           <div style={{ ...S.segWrap, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
             <button type="button" onClick={() => setTipo("ventanilla")} style={S.seg(tipo === "ventanilla")}><span style={S.dot(tipo === "ventanilla" ? C.orange : C.gris)} />Reparación</button>
             <button type="button" onClick={() => setTipo("llamada")} style={S.seg(tipo === "llamada")}><span style={S.dot(tipo === "llamada" ? MORADO : C.gris)} />Llamada</button>
@@ -403,7 +445,9 @@ export default function Recepcion() {
 
         {/* ---------- Columna derecha ---------- */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12, flex: "none" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, flex: "none" }}>
+            {kpi("Por devolver", perdidas.length, perdidas.length ? C.red : C.ink,
+              <button type="button" onClick={() => setBit("perdidas")} style={{ height: 34, padding: "0 12px", borderRadius: 17, border: `1px solid ${perdidas.length ? C.red : C.line2}`, background: perdidas.length ? C.redSoft : "#fff", color: perdidas.length ? C.redDark : C.muted, fontSize: 13, fontWeight: 700, flex: "none" }}>Ver</button>)}
             {kpi("Clientes en espera", espera, C.orangeDark)}
             {kpi("Reparando", arreglando, C.ink)}
             {kpi("Cerrados hoy", cerrados, C.green)}
@@ -501,8 +545,10 @@ export default function Recepcion() {
           <div style={{ ...S.card, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "12px 18px", flex: "none" }}>
               <div style={{ display: "flex", gap: 2, background: C.soft2, borderRadius: 10, padding: 3 }}>
-                {[["turnos", "Bitácora de hoy"], ["llamadas", "Llamadas"]].map(([k, l]) => (
-                  <button key={k} type="button" onClick={() => setBit(k)} style={{ ...S.seg(bit === k), minHeight: 32, padding: "0 14px", fontSize: 13, borderRadius: 8 }}>{l}</button>
+                {[["turnos", "Bitácora de hoy"], ["llamadas", "Llamadas"], ["perdidas", "Por devolver"]].map(([k, l]) => (
+                  <button key={k} type="button" onClick={() => setBit(k)} style={{ ...S.seg(bit === k), minHeight: 32, padding: "0 14px", fontSize: 13, borderRadius: 8, display: "flex", gap: 6 }}>
+                    {l}{k === "perdidas" && perdidas.length > 0 && <span style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: C.red, color: "#fff", fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{perdidas.length}</span>}
+                  </button>
                 ))}
               </div>
               {bit === "llamadas" ? (
@@ -511,9 +557,66 @@ export default function Recepcion() {
                     <button key={k} type="button" onClick={() => setFiltro(k)} style={{ height: 30, padding: "0 12px", borderRadius: 15, border: "none", fontSize: 12, fontWeight: filtro === k ? 700 : 600, background: filtro === k ? MORADO : "transparent", color: filtro === k ? "#fff" : C.muted }}>{l}</button>
                   ))}
                 </div>
-              ) : <div style={{ fontSize: 13, color: C.faint }}>{bitacora.length} cerrados hoy</div>}
+              ) : bit === "perdidas" ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ fontSize: 13, color: C.faint }}>{perdidas.length === 0 ? "Nada pendiente" : `${perdidas.length} por devolver · suena un aviso cuando entra una`}</div>
+                  <button type="button" onClick={cargarPerdidas} style={{ height: 30, padding: "0 12px", borderRadius: 15, border: `1px solid ${C.soft2}`, background: "transparent", fontSize: 12, fontWeight: 600, color: C.ink2 }}>Actualizar</button>
+                </div>
+              )
+                : <div style={{ fontSize: 13, color: C.faint }}>{bitacora.length} cerrados hoy</div>}
             </div>
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+              {bit === "perdidas" && perdidas.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>Todo devuelto. Cuando entre una llamada perdida o un voicemail aparece aquí.</div>}
+              {bit === "perdidas" && perdidas.map((p) => {
+                const mia = p.tomada_por && regNombre && p.tomada_por.toLowerCase() === regNombre.toLowerCase();
+                const urg = p.estado === "abierta" && (Date.now() - new Date(p.primera_llamada)) > 15 * 60000;
+                const btn = (bg, fg, border) => ({ height: 34, padding: "0 12px", borderRadius: 10, border: border || "none", background: bg, color: fg, fontSize: 13, fontWeight: 700, flex: "none" });
+                return (
+                  <div key={p.id} style={{ padding: "12px 18px", borderTop: `1px solid ${C.soft2}`, borderLeft: urg ? `3px solid ${C.red}` : "3px solid transparent", display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.2 }}>{fmtTel(p.telefono)}</div>
+                        {p.nombre_cid && <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.nombre_cid}</div>}
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                          <span style={S.pill(p.tiene_voicemail ? C.moradoSoft : C.orangeSoft, p.tiene_voicemail ? C.moradoDark : C.orangeDark)}>{p.tiene_voicemail ? `Voicemail${p.voicemail_seg ? " · " + p.voicemail_seg + "s" : ""}` : "Perdida"}</span>
+                          {p.veces > 1 && <span style={S.pill(C.redSoft, C.redDark)}>Llamó {p.veces} veces</span>}
+                          {p.intentos > 0 && <span style={S.pill(C.soft2, C.ink2)}>Intento {p.intentos} de 3</span>}
+                          {p.estado === "tomada" && <span style={S.pill(C.blueSoft, C.blueDark)}>{mia ? "La tienes tú" : "La tiene " + p.tomada_por}</span>}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", flex: "none" }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: urg ? C.red : C.ink2 }}>{hace(p.ultima_llamada)}</div>
+                        <div style={{ fontSize: 11, color: C.faint }}>{fmtHora(p.ultima_llamada)}</div>
+                      </div>
+                    </div>
+                    {p.voicemail_url && (audios[p.id]
+                      ? <audio controls src={audios[p.id]} style={{ width: "100%", maxWidth: 420, height: 34 }} />
+                      : <button type="button" onClick={() => escucharVm(p)} style={{ ...btn("#fff", C.moradoDark, `1px solid ${C.line2}`), alignSelf: "flex-start" }}>Escuchar voicemail</button>)}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      {p.estado === "abierta"
+                        ? <button type="button" onClick={() => accionPerdida(() => perdidaTomar(p.id, regNombre))} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>La tomo</button>
+                        : <button type="button" onClick={() => accionPerdida(() => perdidaSoltar(p.id))} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>Soltar</button>}
+                      <button type="button" onClick={() => accionPerdida(() => perdidaNoContesto(p.id, regNombre))} style={btn(C.orangeSoft, C.orangeDark)}>{(p.intentos || 0) >= 2 ? "No contestó · cerrar" : "No contestó"}</button>
+                      <button type="button" onClick={() => devolver(p)} style={btn(MORADO, "#fff")}>Devolver llamada</button>
+                      <button type="button" onClick={() => accionPerdida(() => perdidaCerrar(p.id, "spam", regNombre))} style={{ marginLeft: "auto", border: "none", background: "transparent", color: C.faint, fontSize: 12, fontWeight: 600, textDecoration: "underline" }}>Spam / no aplica</button>
+                    </div>
+                  </div>
+                );
+              })}
+              {bit === "perdidas" && perdidasCerr.length > 0 && (
+                <>
+                  <div style={{ ...S.cap, padding: "14px 18px 6px", borderTop: `1px solid ${C.soft2}` }}>Devueltas · últimos 7 días</div>
+                  {perdidasCerr.map((p) => {
+                    const r = { contestada: ["Devuelta", C.greenSoft, C.greenDark], no_contesta: ["No contestó", C.redSoft, C.redDark], spam: ["Spam", C.soft2, C.ink2], no_aplica: ["No aplica", C.soft2, C.ink2] }[p.resultado] || [p.resultado, C.soft2, C.ink2];
+                    return (
+                      <div key={p.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "9px 18px", borderTop: `1px solid ${C.soft2}`, alignItems: "center", fontSize: 13 }}>
+                        <div style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}><b>{fmtTel(p.telefono)}</b> <span style={{ color: C.faint }}>· {p.cerrada_por || "—"}{p.minutos_respuesta != null ? ` · ${Math.round(p.minutos_respuesta)} min` : ""}{p.intentos ? ` · ${p.intentos} intentos` : ""} · {fmtDia(p.cerrada_at)} {fmtHora(p.cerrada_at)}</span></div>
+                        <span style={S.pill(r[1], r[2])}>{r[0]}</span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
               {bit === "llamadas" && lista.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>No hay llamadas en este periodo.</div>}
               {bit === "llamadas" && lista.map((l) => {
                 const e = estadoLlamada(l);
