@@ -278,7 +278,7 @@ export default function Reparacion() {
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden" }}>
                     <span style={{ flex: "none", fontSize: 18, fontWeight: 700, color: C.orangeDark }}>{nm(t.modelo_codigo)}</span>
-                    <span style={{ fontSize: 14, color: C.faint, overflow: "hidden", textOverflow: "ellipsis" }}>{proc ? "con " + titulo(t.atendido_por_nombre) : "Serie " + t.serial}{t.lugar_compra ? " · " + t.lugar_compra : ""}</span>
+                    <span style={{ fontSize: 14, color: C.faint, overflow: "hidden", textOverflow: "ellipsis" }}>{[proc ? "con " + titulo(t.atendido_por_nombre) : t.serial ? "Serie " + t.serial : null, t.lugar_compra].filter(Boolean).join(" · ")}</span>
                   </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -336,7 +336,7 @@ export default function Reparacion() {
                     <span style={{ flex: "none", fontSize: 15, fontWeight: 700, color: "#fff", background: C.orange, padding: "5px 12px", borderRadius: 10 }}>{modoPin === "iniciar" ? posFila(turnoPin) + "º en fila" : "Reparando"}</span>
                     <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{turnoPin.cliente_nombre}</span>
                   </div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><span style={{ fontSize: 19, fontWeight: 700, color: C.orangeDark }}>{nm(turnoPin.modelo_codigo)}</span><span style={{ fontSize: 15, color: C.faint }}>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turnoPin.serial}</span> · esperando {minDesde(turnoPin.created_at, now)} min</span></div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><span style={{ fontSize: 19, fontWeight: 700, color: C.orangeDark }}>{nm(turnoPin.modelo_codigo)}</span><span style={{ fontSize: 15, color: C.faint }}>{turnoPin.serial && <>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turnoPin.serial}</span> · </>}esperando {minDesde(turnoPin.created_at, now)} min</span></div>
                 </div>
                 <button type="button" onClick={volver} aria-label="Cerrar" style={{ flex: "none", width: 44, height: 44, borderRadius: 22, border: `1px solid ${C.line2}`, background: "#fff", color: C.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
@@ -380,7 +380,7 @@ export default function Reparacion() {
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden" }}>
                   <span style={{ flex: "none", fontSize: 22, fontWeight: 700, color: C.ink }}>{nm(turno.modelo_codigo)}</span>
-                  <span style={{ fontSize: 15, color: C.faint, overflow: "hidden", textOverflow: "ellipsis" }}>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turno.serial}</span>{turno.lugar_compra ? " · Compró en " + turno.lugar_compra : ""}</span>
+                  <span style={{ fontSize: 15, color: C.faint, overflow: "hidden", textOverflow: "ellipsis" }}>{turno.serial && <>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turno.serial}</span>{turno.lugar_compra ? " · " : ""}</>}{turno.lugar_compra ? "Compró en " + turno.lugar_compra : ""}</span>
                 </div>
               </div>
               <button type="button" onClick={() => setPop(pop === "cliente" ? null : "cliente")} style={chipTop(pop === "cliente", C.ink2, "#fff")}>Info del cliente</button>
