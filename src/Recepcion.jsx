@@ -88,6 +88,49 @@ function Combo({ items, valueId, onPick, placeholder = "Escribe o escoge", label
   );
 }
 
+// Mini dashboard de llamadas perdidas de hoy (arriba de la lista "Por devolver")
+const esHoyPR = (iso) => iso && new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Puerto_Rico" }) === new Date().toLocaleDateString("en-CA", { timeZone: "America/Puerto_Rico" });
+function MiniPerdidas({ abiertas, cerradas }) {
+  const hoyAb = abiertas.filter((p) => esHoyPR(p.primera_llamada));
+  const hoyCe = cerradas.filter((p) => esHoyPR(p.primera_llamada));
+  const entraron = hoyAb.length + hoyCe.length;
+  const vm = [...hoyAb, ...hoyCe].filter((p) => p.tiene_voicemail).length;
+  const dev = hoyCe.filter((p) => p.resultado === "contestada");
+  const noCont = hoyCe.filter((p) => p.resultado === "no_contesta").length;
+  const prom = dev.length ? Math.round(dev.reduce((a, p) => a + (p.minutos_respuesta || 0), 0) / dev.length) : null;
+  const pct = entraron ? Math.round(dev.length / entraron * 100) : 0;
+  const por = {};
+  hoyCe.forEach((p) => { if (!p.cerrada_por) return; const q = por[p.cerrada_por] || (por[p.cerrada_por] = { dev: 0, otras: 0, min: 0 }); if (p.resultado === "contestada") { q.dev++; q.min += p.minutos_respuesta || 0; } else q.otras++; });
+  const personas = Object.entries(por).sort((a, b) => b[1].dev - a[1].dev);
+  const tile = (l, v, color) => (
+    <div key={l} style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 11, color: C.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>{l}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.3, color: color || C.ink }}>{v}</div>
+    </div>
+  );
+  return (
+    <div style={{ padding: "12px 18px 14px", borderTop: `1px solid ${C.soft2}`, background: C.soft, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
+        {tile("Hoy entraron", entraron)}
+        {tile("Voicemail", vm, C.moradoDark)}
+        {tile("Devueltas", dev.length, C.greenDark)}
+        {tile("No contestaron", noCont, noCont ? C.redDark : C.ink)}
+        {tile("Respuesta", prom != null ? `${prom} min` : "—")}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1, height: 6, background: C.soft2, borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: C.green }} /></div>
+        <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, flex: "none" }}>{pct}% devueltas</div>
+      </div>
+      {personas.length > 0 && (
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: C.muted }}>
+          <span style={{ fontWeight: 700, color: C.ink2 }}>Quién atendió:</span>
+          {personas.map(([n, q]) => <span key={n}><b style={{ color: C.ink }}>{titulo(n)}</b> {q.dev} devuelta{q.dev !== 1 ? "s" : ""}{q.dev ? ` · ${Math.round(q.min / q.dev)} min` : ""}{q.otras ? ` · ${q.otras} sin contestar/spam` : ""}</span>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Recepcion() {
   const { empleados, modelos } = useCatalogos();
   const { abiertos, hoy, recargar } = useTurnos();
@@ -216,13 +259,39 @@ export default function Recepcion() {
 
   const limpiar = () => { setF(vacio); setFl(vacioL); setHist([]); setCliente(null); setDevolviendo(null); };
 
-  // Devolver una llamada perdida: abre el formulario de llamada con el telefono puesto
+  // Lo que ve esta pantalla: abiertas + la que este usuario esta atendiendo. Las que tomo otro (Carlos en MareyApp) desaparecen.
+  const perdidasVisibles = perdidas.filter((p) => p.estado === "abierta" || (regNombre && p.tomada_por && p.tomada_por.toLowerCase() === regNombre.toLowerCase()));
+
+  // Atender: la toma (desaparece de la lista del otro) y abre el formulario de llamada con el telefono puesto
   const devolver = (p) => {
     setDevolviendo(p); setTipo("llamada"); setBit("perdidas");
     setF({ ...vacio, telefono: fmtTel(p.telefono) }); setFl(vacioL); setCliente(null);
     if (p.estado === "abierta" && regNombre) perdidaTomar(p.id, regNombre).then(cargarPerdidas).catch(() => {});
   };
   const accionPerdida = async (fn) => { try { await fn(); } catch (e) { setLlMsg({ ok: false, t: e.message }); } cargarPerdidas(); };
+  const limpiarAtendiendo = () => { setDevolviendo(null); setF(vacio); setFl(vacioL); setHist([]); setCliente(null); setBit("perdidas"); };
+  // No contesto: suma un intento y la suelta para que vuelva a la lista; al tercero se cierra sola
+  const noContestoAtendiendo = async () => {
+    const p = devolviendo; if (!p) return;
+    await accionPerdida(async () => {
+      const n = await perdidaNoContesto(p.id, regNombre);
+      if (n < 3) await perdidaSoltar(p.id);
+      setLlMsg({ ok: true, t: n >= 3 ? `${fmtTel(p.telefono)} cerrada: no contestó en 3 intentos.` : `${fmtTel(p.telefono)} vuelve a la lista · ${n} ${n === 1 ? "intento" : "intentos"} sin contestar.` });
+    });
+    limpiarAtendiendo();
+  };
+  const spamAtendiendo = async () => {
+    const p = devolviendo; if (!p) return;
+    await accionPerdida(() => perdidaCerrar(p.id, "spam", regNombre));
+    setLlMsg({ ok: true, t: `${fmtTel(p.telefono)} marcada como spam.` });
+    limpiarAtendiendo();
+  };
+  // Cancelar: la suelta y vuelve a la lista de los dos
+  const cancelarAtendiendo = async () => {
+    const p = devolviendo; if (!p) return;
+    await accionPerdida(() => perdidaSoltar(p.id));
+    limpiarAtendiendo();
+  };
 
   const guardarLlamada = async (r) => {
     if (!okL || busy) return;
@@ -356,9 +425,14 @@ export default function Recepcion() {
           </div>
 
           {devolviendo && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderRadius: 10, background: C.redSoft, color: C.redDark, fontSize: 13, fontWeight: 600, flex: "none" }}>
-              <span>Devolviendo llamada perdida · {fmtTel(devolviendo.telefono)}{devolviendo.veces > 1 ? ` · llamó ${devolviendo.veces} veces` : ""}</span>
-              <button type="button" onClick={() => { setDevolviendo(null); setF(vacio); setFl(vacioL); }} style={{ border: "none", background: "transparent", color: C.redDark, fontSize: 12, fontWeight: 700, textDecoration: "underline" }}>Cancelar</button>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderRadius: 10, background: C.orangeSoft, color: C.orangeDark, fontSize: 13, flex: "none" }}>
+              <div style={{ fontWeight: 700 }}>Atendiendo llamada perdida{devolviendo.tiene_voicemail ? " · voicemail" : ""}</div>
+              <div>{fmtTel(devolviendo.telefono)}{devolviendo.nombre_cid ? ` · ${devolviendo.nombre_cid}` : ""} · llamó {devolviendo.veces} {devolviendo.veces === 1 ? "vez" : "veces"}{devolviendo.intentos ? ` · ${devolviendo.intentos} ${devolviendo.intentos === 1 ? "intento" : "intentos"} sin contestar` : ""}</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button type="button" onClick={noContestoAtendiendo} style={{ height: 34, padding: "0 12px", borderRadius: 10, border: "none", background: C.orange, color: "#fff", fontSize: 13, fontWeight: 700 }}>{(devolviendo.intentos || 0) >= 2 ? "No contestó · cerrar" : "No contestó"}</button>
+                <button type="button" onClick={spamAtendiendo} style={{ height: 34, padding: "0 12px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 13, fontWeight: 700 }}>Spam</button>
+                <button type="button" onClick={cancelarAtendiendo} style={{ marginLeft: "auto", border: "none", background: "transparent", color: C.orangeDark, fontSize: 12, fontWeight: 700, textDecoration: "underline" }}>Cancelar</button>
+              </div>
             </div>
           )}
           <div style={{ ...S.segWrap, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
@@ -566,39 +640,35 @@ export default function Recepcion() {
                 : <div style={{ fontSize: 13, color: C.faint }}>{bitacora.length} cerrados hoy</div>}
             </div>
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {bit === "perdidas" && perdidas.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>Todo devuelto. Cuando entre una llamada perdida o un voicemail aparece aquí.</div>}
-              {bit === "perdidas" && perdidas.map((p) => {
+              {bit === "perdidas" && <MiniPerdidas abiertas={perdidas} cerradas={perdidasCerr} />}
+              {bit === "perdidas" && perdidasVisibles.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>Todo devuelto. Cuando entre una llamada perdida o un voicemail aparece aquí.</div>}
+              {bit === "perdidas" && perdidasVisibles.map((p) => {
                 const mia = p.tomada_por && regNombre && p.tomada_por.toLowerCase() === regNombre.toLowerCase();
                 const urg = p.estado === "abierta" && (Date.now() - new Date(p.primera_llamada)) > 15 * 60000;
-                const btn = (bg, fg, border) => ({ height: 34, padding: "0 12px", borderRadius: 10, border: border || "none", background: bg, color: fg, fontSize: 13, fontWeight: 700, flex: "none" });
+                const btn = (bg, fg, border) => ({ height: 38, padding: "0 16px", borderRadius: 10, border: border || "none", background: bg, color: fg, fontSize: 14, fontWeight: 700, flex: "none" });
                 return (
-                  <div key={p.id} style={{ padding: "12px 18px", borderTop: `1px solid ${C.soft2}`, borderLeft: urg ? `3px solid ${C.red}` : "3px solid transparent", display: "flex", flexDirection: "column", gap: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.2 }}>{fmtTel(p.telefono)}</div>
-                        {p.nombre_cid && <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.nombre_cid}</div>}
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
-                          <span style={S.pill(p.tiene_voicemail ? C.moradoSoft : C.orangeSoft, p.tiene_voicemail ? C.moradoDark : C.orangeDark)}>{p.tiene_voicemail ? `Voicemail${p.voicemail_seg ? " · " + p.voicemail_seg + "s" : ""}` : "Perdida"}</span>
-                          {p.veces > 1 && <span style={S.pill(C.redSoft, C.redDark)}>Llamó {p.veces} veces</span>}
-                          {p.intentos > 0 && <span style={S.pill(C.soft2, C.ink2)}>Intento {p.intentos} de 3</span>}
-                          {p.estado === "tomada" && <span style={S.pill(C.blueSoft, C.blueDark)}>{mia ? "La tienes tú" : "La tiene " + p.tomada_por}</span>}
-                        </div>
+                  <div key={p.id} style={{ padding: "12px 18px", borderTop: `1px solid ${C.soft2}`, borderLeft: urg ? `3px solid ${C.red}` : "3px solid transparent", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.2 }}>{fmtTel(p.telefono)}</div>
+                      {p.nombre_cid && <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.nombre_cid}</div>}
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                        <span style={S.pill(p.tiene_voicemail ? C.moradoSoft : C.orangeSoft, p.tiene_voicemail ? C.moradoDark : C.orangeDark)}>{p.tiene_voicemail ? `Voicemail${p.voicemail_seg ? " · " + p.voicemail_seg + "s" : ""}` : "Perdida"}</span>
+                        {p.veces > 1 && <span style={S.pill(C.redSoft, C.redDark)}>Llamó {p.veces} veces</span>}
+                        {p.intentos > 0 && <span style={S.pill(C.soft2, C.ink2)}>{p.intentos} {p.intentos === 1 ? "intento" : "intentos"} sin contestar</span>}
+                        {mia && <span style={S.pill(C.greenSoft, C.greenDark)}>La estás atendiendo</span>}
                       </div>
-                      <div style={{ textAlign: "right", flex: "none" }}>
+                      {p.voicemail_url && (audios[p.id]
+                        ? <audio controls src={audios[p.id]} style={{ width: "100%", maxWidth: 420, height: 34, marginTop: 8 }} />
+                        : <button type="button" onClick={() => escucharVm(p)} style={{ height: 32, padding: "0 12px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.moradoDark, fontSize: 13, fontWeight: 700, marginTop: 8 }}>Escuchar voicemail</button>)}
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10, flex: "none" }}>
+                      <div style={{ textAlign: "right" }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: urg ? C.red : C.ink2 }}>{hace(p.ultima_llamada)}</div>
                         <div style={{ fontSize: 11, color: C.faint }}>{fmtHora(p.ultima_llamada)}</div>
                       </div>
-                    </div>
-                    {p.voicemail_url && (audios[p.id]
-                      ? <audio controls src={audios[p.id]} style={{ width: "100%", maxWidth: 420, height: 34 }} />
-                      : <button type="button" onClick={() => escucharVm(p)} style={{ ...btn("#fff", C.moradoDark, `1px solid ${C.line2}`), alignSelf: "flex-start" }}>Escuchar voicemail</button>)}
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      {p.estado === "abierta"
-                        ? <button type="button" onClick={() => accionPerdida(() => perdidaTomar(p.id, regNombre))} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>La tomo</button>
-                        : <button type="button" onClick={() => accionPerdida(() => perdidaSoltar(p.id))} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>Soltar</button>}
-                      <button type="button" onClick={() => accionPerdida(() => perdidaNoContesto(p.id, regNombre))} style={btn(C.orangeSoft, C.orangeDark)}>{(p.intentos || 0) >= 2 ? "No contestó · cerrar" : "No contestó"}</button>
-                      <button type="button" onClick={() => devolver(p)} style={btn(MORADO, "#fff")}>Devolver llamada</button>
-                      <button type="button" onClick={() => accionPerdida(() => perdidaCerrar(p.id, "spam", regNombre))} style={{ marginLeft: "auto", border: "none", background: "transparent", color: C.faint, fontSize: 12, fontWeight: 600, textDecoration: "underline" }}>Spam / no aplica</button>
+                      {mia
+                        ? <button type="button" onClick={() => { if (!devolviendo || devolviendo.id !== p.id) devolver(p); else setTipo("llamada"); }} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>Continuar</button>
+                        : <button type="button" onClick={() => devolver(p)} style={btn(MORADO, "#fff")}>Atender</button>}
                     </div>
                   </div>
                 );
