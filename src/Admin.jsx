@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
 import { C, S, mono, TZ, hoyPR, rpc, titulo } from "./lib.js";
 import { Header, PinPad, Expediente, BuscadorExpediente } from "./components.jsx";
+import { metricasPerdidas, metricasPerdidasPorAgente } from "./llamadas.js";
 
 const DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const IDLE_MS = 5 * 60 * 1000;
@@ -50,6 +51,8 @@ export default function Admin() {
   const [q, setQ] = useState("");
   const [costo, setCosto] = useState("");
   const [margen, setMargen] = useState("");
+  const [perd, setPerd] = useState(null);       // metricas de llamadas perdidas (MareyApp)
+  const [perdAg, setPerdAg] = useState([]);
   const timer = useRef(null);
 
   // Cierre automático por inactividad
@@ -60,6 +63,13 @@ export default function Admin() {
     ["mousemove", "keydown", "touchstart", "click"].forEach((ev) => window.addEventListener(ev, reset));
     return () => { clearTimeout(timer.current); ["mousemove", "keydown", "touchstart", "click"].forEach((ev) => window.removeEventListener(ev, reset)); };
   }, [admin]);
+
+  useEffect(() => {
+    if (!admin) return;
+    const desde = rango(periodo), hasta = hoyPR();
+    metricasPerdidas(desde, hasta).then(setPerd).catch(() => setPerd(null));
+    metricasPerdidasPorAgente(desde, hasta).then((d) => setPerdAg(d || [])).catch(() => setPerdAg([]));
+  }, [admin, periodo]);
 
   useEffect(() => {
     if (!admin) return;
@@ -125,6 +135,39 @@ export default function Admin() {
               <div key={l} style={{ ...S.card, padding: "16px 18px" }}><div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{l}</div><div style={{ fontSize: 32, fontWeight: 700, fontFamily: mono, marginTop: 4 }}>{v}</div><div style={{ fontSize: 13, color: C.muted }}>{s}</div></div>
             ))}
           </div>
+
+          <section style={{ ...S.card, borderRadius: 14, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+              <h2 style={{ fontSize: 18 }}>Llamadas perdidas y voicemail</h2>
+              <div style={{ fontSize: 13, color: C.muted }}>{perd ? `${perd.pct_devueltas}% devueltas · tiempo de respuesta ${perd.min_respuesta != null ? perd.min_respuesta + " min promedio" : "—"}${perd.min_respuesta_med != null ? ", mediana " + perd.min_respuesta_med + " min" : ""}` : "Cargando..."}</div>
+            </div>
+            {perd && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+                {[["Entraron", perd.total, C.soft, C.ink], ["Perdidas", perd.perdidas, C.orangeSoft, C.orangeDark], ["Voicemail", perd.voicemails, C.moradoSoft, C.moradoDark], ["Devueltas", perd.devueltas, C.greenSoft, C.greenDark], ["No contestaron", perd.no_contestaron, C.redSoft, C.redDark], ["Spam / no aplica", perd.spam, C.soft, C.ink2], ["Abiertas ahora", perd.abiertas, perd.abiertas ? C.redSoft : C.soft, perd.abiertas ? C.redDark : C.ink2]].map(([l, v, bg, fg]) => (
+                  <div key={l} style={{ background: bg, borderRadius: 10, padding: "12px 14px" }}><div style={{ fontSize: 12, color: fg, fontWeight: 600, opacity: .85 }}>{l}</div><div style={{ fontSize: 26, fontWeight: 700, fontFamily: mono, color: fg }}>{v}</div></div>
+                ))}
+              </div>
+            )}
+            {perd && perd.total > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}><span>Devueltas</span><span style={{ fontFamily: mono }}>{perd.devueltas} de {perd.total} · {perd.pct_devueltas}%</span></div>
+                <div style={{ height: 10, background: C.soft2, borderRadius: 4 }}><div style={{ height: "100%", width: perd.pct_devueltas + "%", background: C.green, borderRadius: 4 }} /></div>
+              </div>
+            )}
+            {perdAg.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>Quién las devolvió</div>
+                {perdAg.map((a) => (
+                  <div key={a.agente} style={{ display: "grid", gridTemplateColumns: "140px 1fr 140px", gap: 10, alignItems: "center", fontSize: 13 }}>
+                    <span>{titulo(a.agente)}</span>
+                    <div style={{ height: 12, background: C.soft2, borderRadius: 4 }}><div style={{ height: "100%", width: (a.devueltas / Math.max(...perdAg.map((x) => x.devueltas)) * 100) + "%", background: C.morado, borderRadius: 4 }} /></div>
+                    <span style={{ fontFamily: mono, textAlign: "right" }}>{a.devueltas} · {a.min_respuesta != null ? a.min_respuesta + " min" : "—"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: C.faint }}>Fuente: avisos de Verve que entran a MareyApp. Una fila por número: si el cliente llama varias veces o deja voicemail, cuenta una sola vez.</div>
+          </section>
 
           <section style={{ ...S.card, borderRadius: 14, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
