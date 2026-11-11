@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
-import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, hoyPR, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA, SALIDAS, RAZONES_NINGUNO } from "./lib.js";
+import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, hoyPR, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA, SALIDAS, RAZONES_NINGUNO, SIN_PIEZA } from "./lib.js";
 import { Header, Leaderboard, Expediente, BuscadorExpediente, Modal } from "./components.jsx";
 import { catalogoLlamadas, llamadasPorTelefono, llamadasDesde, registrarLlamada, estadoLlamada, esCitado, RESULTADOS_LLAMADA, MORADO,
-  perdidasAbiertas, perdidasCerradas, perdidaTomar, perdidaSoltar, perdidaNoContesto, perdidaCerrar, suscribirPerdidas, urlVoicemail, fmtTel, hace, beep } from "./llamadas.js";
+  perdidasAbiertas, perdidasCerradas, perdidasPorRango, perdidaTomar, perdidaSoltar, perdidaNoContesto, perdidaCerrar, suscribirPerdidas, urlVoicemail, fmtTel, hace, beep } from "./llamadas.js";
 
 const vacio = { nombre: "", telefono: "", pueblo: "", modelo: "", compra: "" };
 const vacioL = { municipio_id: "", modelo_id: "", antiguedad_id: "", problema: "" };
@@ -98,17 +98,24 @@ function Combo({ items, valueId, onPick, placeholder = "Escribe o escoge", label
 
 // Mini dashboard de llamadas perdidas de hoy (arriba de la lista "Por devolver")
 const esHoyPR = (iso) => iso && new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Puerto_Rico" }) === new Date().toLocaleDateString("en-CA", { timeZone: "America/Puerto_Rico" });
+// Resultados que cuentan como "devuelta y contactada" (incluye el valor viejo 'contestada')
+const CONTACTADA = ["atendida", "contestada", "pendiente_tecnico", "ya_atendido"];
+const esContactada = (p) => CONTACTADA.includes(p.resultado);
+// Etiqueta legible de cada resultado de llamada perdida
+const RES_LABEL = (r) => ({ atendida: "Devuelta y atendida", contestada: "Devuelta y atendida", pendiente_tecnico: "Pendiente técnico", ya_atendido: "Ya estaba atendido", no_contesta: "Devuelta, no contestó", spam: "No aplica", no_aplica: "No aplica" })[r] || r;
+// Colores [fondo, texto] por resultado
+const RES_COLOR = (r) => ({ atendida: [C.greenSoft, C.greenDark], contestada: [C.greenSoft, C.greenDark], pendiente_tecnico: [C.orangeSoft, C.orangeDark], ya_atendido: [MORADO + "22", MORADO], no_contesta: [C.redSoft, C.redDark] })[r] || [C.soft2, C.ink2];
 function MiniPerdidas({ abiertas, cerradas }) {
   const hoyAb = abiertas.filter((p) => esHoyPR(p.primera_llamada));
   const hoyCe = cerradas.filter((p) => esHoyPR(p.primera_llamada));
   const entraron = hoyAb.length + hoyCe.length;
   const vm = [...hoyAb, ...hoyCe].filter((p) => p.tiene_voicemail).length;
-  const dev = hoyCe.filter((p) => p.resultado === "contestada");
+  const dev = hoyCe.filter(esContactada);
   const noCont = hoyCe.filter((p) => p.resultado === "no_contesta").length;
   const prom = dev.length ? Math.round(dev.reduce((a, p) => a + (p.minutos_respuesta || 0), 0) / dev.length) : null;
   const pct = entraron ? Math.round(dev.length / entraron * 100) : 0;
   const por = {};
-  hoyCe.forEach((p) => { if (!p.cerrada_por) return; const q = por[p.cerrada_por] || (por[p.cerrada_por] = { dev: 0, otras: 0, min: 0 }); if (p.resultado === "contestada") { q.dev++; q.min += p.minutos_respuesta || 0; } else q.otras++; });
+  hoyCe.forEach((p) => { if (!p.cerrada_por) return; const q = por[p.cerrada_por] || (por[p.cerrada_por] = { dev: 0, otras: 0, min: 0 }); if (esContactada(p)) { q.dev++; q.min += p.minutos_respuesta || 0; } else q.otras++; });
   const personas = Object.entries(por).sort((a, b) => b[1].dev - a[1].dev);
   const tile = (l, v, color) => (
     <div key={l} style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
@@ -132,12 +139,242 @@ function MiniPerdidas({ abiertas, cerradas }) {
       {personas.length > 0 && (
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: C.muted }}>
           <span style={{ fontWeight: 700, color: C.ink2 }}>Quién atendió:</span>
-          {personas.map(([n, q]) => <span key={n}><b style={{ color: C.ink }}>{titulo(n)}</b> {q.dev} devuelta{q.dev !== 1 ? "s" : ""}{q.dev ? ` · ${Math.round(q.min / q.dev)} min` : ""}{q.otras ? ` · ${q.otras} sin contestar/spam` : ""}</span>)}
+          {personas.map(([n, q]) => <span key={n}><b style={{ color: C.ink }}>{titulo(n)}</b> {q.dev} devuelta{q.dev !== 1 ? "s" : ""}{q.dev ? ` · ${Math.round(q.min / q.dev)} min` : ""}{q.otras ? ` · ${q.otras} sin contestar/no aplica` : ""}</span>)}
         </div>
       )}
     </div>
   );
 }
+
+// ====================== RESUMEN GERENCIAL ======================
+const cuenta = (arr, key) => { const o = {}; arr.forEach((x) => { const k = typeof key === "function" ? key(x) : x[key]; if (k == null || k === "") return; o[k] = (o[k] || 0) + 1; }); return Object.entries(o).sort((a, b) => b[1] - a[1]); };
+const diaSemana = (iso) => ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"][new Date(iso).getDay()];
+const porDia = (arr, getIso) => { const o = {}; arr.forEach((x) => { const d = diaSemana(getIso(x)); o[d] = (o[d] || 0) + 1; }); return ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].filter((d) => o[d]).map((d) => [d, o[d]]); };
+function Barras({ pairs, color, total }) {
+  if (!pairs.length) return <div style={{ fontSize: 13, color: C.faint, padding: "2px 0" }}>Sin datos</div>;
+  const mx = Math.max.apply(null, pairs.map((p) => p[1]));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {pairs.map(([k, v]) => (
+        <div key={k} style={{ display: "grid", gridTemplateColumns: "130px 1fr 92px", gap: 10, alignItems: "center", fontSize: 13 }}>
+          <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{titulo(k)}</span>
+          <div style={{ height: 10, background: C.soft2, borderRadius: 5, overflow: "hidden" }}><div style={{ height: "100%", width: Math.round(v / mx * 100) + "%", background: color, borderRadius: 5 }} /></div>
+          <span style={{ fontFamily: mono, fontSize: 12, textAlign: "right", color: C.ink2 }}>{v}{total ? ` · ${Math.round(v / total * 100)}%` : ""}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+const Chip = ({ l, v, c }) => <span style={{ fontSize: 12, color: C.muted, background: C.soft, border: `1px solid ${C.soft2}`, borderRadius: 999, padding: "3px 9px", whiteSpace: "nowrap" }}><b style={{ fontSize: 13, color: c || C.ink }}>{v}</b> {l}</span>;
+// Encabezado de sección de la lista de perdidas: banda suave, punto de color, título, conteo y descripción
+const SecHead = ({ dot, t, n, d }) => (
+  <div style={{ padding: "13px 18px 12px", background: C.soft, borderTop: `1px solid ${C.soft2}`, display: "flex", flexDirection: "column", gap: 4 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flex: "none" }} />
+      <span style={{ fontSize: 14, fontWeight: 700, color: C.ink, letterSpacing: -0.1 }}>{t}</span>
+      {n != null && <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: C.muted, background: C.card, border: `1px solid ${C.line2}`, borderRadius: 999, padding: "1px 9px" }}>{n}</span>}
+    </div>
+    {d && <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.45, paddingLeft: 17 }}>{d}</div>}
+  </div>
+);
+
+function ResumenView({ T, L, P, abiertasCount, cargando, onDetalle }) {
+  const Tv = T.filter((t) => t.status === "terminado");
+  const anulados = T.length - Tv.length;
+  const nRes = (r) => Tv.filter((t) => t.resultado === r).length;
+  const minProm = Tv.length ? Math.round(Tv.reduce((a, t) => a + (t.segundos_servicio || 0), 0) / Tv.length / 60) : null;
+  const dev = P.filter(esContactada);
+  const noc = P.filter((p) => p.resultado === "no_contesta").length;
+  const noAplica = P.filter((p) => p.resultado === "spam" || p.resultado === "no_aplica").length;
+  const atendidasN = P.filter((p) => p.resultado === "atendida" || p.resultado === "contestada").length;
+  const pendTec = P.filter((p) => p.resultado === "pendiente_tecnico").length;
+  const yaAt = P.filter((p) => p.resultado === "ya_atendido").length;
+  const abiertasN = P.filter((p) => p.estado !== "cerrada").length;
+  const vmP = P.filter((p) => p.tiene_voicemail).length;
+  const prom = dev.length ? Math.round(dev.reduce((a, p) => a + (p.minutos_respuesta || 0), 0) / dev.length) : null;
+  const pct = P.length ? Math.round(dev.length / P.length * 100) : 0;
+  const nLl = (txt) => L.filter((l) => estadoLlamada(l).t === txt).length;
+  // pivot: una fila por persona
+  const per = {};
+  const P_ = (nm) => { const k = titulo((nm || "—").toLowerCase()); return per[k] || (per[k] = { v: 0, t: 0, d: 0, min: 0 }); };
+  Tv.forEach((t) => P_(t.registrado_por_nombre).v++);
+  L.forEach((l) => P_(l.registrado_por).t++);
+  dev.forEach((p) => { const q = P_(p.cerrada_por); q.d++; q.min += p.minutos_respuesta || 0; });
+  const lista = Object.entries(per).sort((a, b) => (b[1].v + b[1].t + b[1].d) - (a[1].v + a[1].t + a[1].d));
+  const lead = { v: 0, t: 0, d: 0 };
+  if (lista.length > 1) ["v", "t", "d"].forEach((k) => { lead[k] = Math.max.apply(null, lista.map((e) => e[1][k])); });
+  const tecs = cuenta(Tv.filter((t) => t.resultado !== SIN_PIEZA), "atendido_por_nombre");
+
+  const can = { border: `1px solid ${C.line2}`, borderRadius: 14, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8, minWidth: 0, background: C.card };
+  const ch = { fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", alignItems: "center", gap: 8 };
+  const bign = { fontSize: 34, fontWeight: 700, letterSpacing: -1, lineHeight: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" };
+  const small = { fontSize: 13, fontWeight: 500, color: C.muted, letterSpacing: 0 };
+  const detBtn = { marginLeft: "auto", height: 26, padding: "0 10px", borderRadius: 13, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 12, fontWeight: 600, textTransform: "none", letterSpacing: 0 };
+  const cell = (v, k) => <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 16, fontWeight: v ? (lead[k] && v === lead[k] ? 800 : 600) : 400, color: v ? (lead[k] && v === lead[k] ? C.green : C.ink) : C.faint }}>{v || "–"}</td>;
+
+  // Reporte en lenguaje natural de las llamadas perdidas
+  const nPlural = (n, s, p2) => `${n} ${n === 1 ? s : (p2 || s + "s")}`;
+  const reporte = [];
+  reporte.push(`Entraron ${nPlural(P.length, "llamada perdida")}${vmP ? ` (${vmP} con voicemail)` : ""}.`);
+  if (dev.length) {
+    const sub = [];
+    if (atendidasN) sub.push(`${atendidasN} se resolvieron o se enviaron a un centro`);
+    if (pendTec) sub.push(`${pendTec} pasaron a técnicos`);
+    if (yaAt) sub.push(`${yaAt} ya no necesitaban ayuda`);
+    reporte.push(`Se les devolvió la llamada a ${dev.length} (${pct}%)${sub.length ? ": " + sub.join(", ") : ""}.`);
+  }
+  if (noc) reporte.push(`A ${noc} se les llamó y no contestaron.`);
+  if (noAplica) reporte.push(`${noAplica} no aplicaban (número malo, repetida o basura).`);
+  if (abiertasN) reporte.push(`${abiertasN === 1 ? "Queda 1 llamada" : `Quedan ${abiertasN} llamadas`} sin devolver.`);
+
+  return (
+    <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14, borderTop: `1px solid ${C.soft2}` }}>
+      {cargando && <div style={{ fontSize: 13, color: C.faint }}>Cargando…</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+        <div style={can}>
+          <div style={ch}><span style={S.dot(C.orange)} />Ventanilla<button type="button" onClick={() => onDetalle("ventanilla")} style={detBtn}>Detalle</button></div>
+          <div style={bign}>{Tv.length}<span style={small}>atendidos</span></div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <Chip l="reparados" v={nRes("Reparado")} c={C.green} /><Chip l="no quiso" v={nRes("Cliente no quiso reparar")} c={C.orangeDark} /><Chip l="orientación" v={nRes(SIN_PIEZA)} /><Chip l="anulados" v={anulados} c={anulados ? C.red : C.ink} /><Chip l="min/cliente" v={minProm != null ? minProm : "—"} />
+          </div>
+        </div>
+        <div style={can}>
+          <div style={ch}><span style={S.dot(MORADO)} />Por teléfono<button type="button" onClick={() => onDetalle("telefono")} style={detBtn}>Detalle</button></div>
+          <div style={bign}>{L.length}<span style={small}>llamadas</span></div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <Chip l="a San Juan" v={nLl("Dirigido a San Juan")} c={C.green} /><Chip l="a San Germán" v={nLl("Dirigido a San Germán")} c={C.blueDark} /><Chip l="a técnicos" v={nLl("Pendiente")} c={C.orangeDark} /><Chip l="se resolvió" v={nLl("Resuelto")} c={C.green} />
+          </div>
+        </div>
+        <div style={can}>
+          <div style={ch}><span style={S.dot(C.red)} />Perdidas y voicemail<button type="button" onClick={() => onDetalle("perdidas")} style={detBtn}>Detalle</button></div>
+          <div style={bign}>{dev.length}<span style={small}>devueltas de {P.length}</span>
+            <span style={{ flex: 1, minWidth: 60, height: 8, background: C.soft2, borderRadius: 4, overflow: "hidden", alignSelf: "center" }}><span style={{ display: "block", height: "100%", width: pct + "%", background: C.green }} /></span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: C.green }}>{pct}%</span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <Chip l="min respuesta" v={prom != null ? prom : "—"} /><Chip l="voicemail" v={vmP} c={C.moradoDark} /><Chip l="sin contestar" v={noc} c={noc ? C.red : C.ink} /><Chip l="no aplica" v={noAplica} /><Chip l="abiertas ahora" v={abiertasCount} c={abiertasCount ? C.red : C.ink} />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background: C.soft, border: `1px solid ${C.soft2}`, borderRadius: 14, padding: "13px 16px", display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.red, flex: "none" }} />
+          <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>Llamadas perdidas · resumen</span>
+        </div>
+        <div style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.6, paddingLeft: 17 }}>{reporte.join(" ")}</div>
+      </div>
+
+      <div style={{ border: `1px solid ${C.line2}`, borderRadius: 14, padding: "12px 16px 14px", display: "flex", flexDirection: "column", gap: 10, background: C.card }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <b style={{ fontSize: 14 }}>Quién atendió</b>
+          <span style={{ fontSize: 12, color: C.muted }}>clientes por canal</span>
+        </div>
+        <div style={{ overflowX: "auto", border: `1px solid ${C.line2}`, borderRadius: 12 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+            <thead><tr>
+              <th style={{ textAlign: "left", padding: "11px 16px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: C.muted, fontWeight: 700, background: C.soft, borderBottom: `1px solid ${C.line2}` }}>Persona</th>
+              {["Ventanilla", "Teléfono", "Devueltas", "Resp.", "Total"].map((h) => <th key={h} style={{ textAlign: "right", padding: "11px 16px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: C.muted, fontWeight: 700, background: C.soft, borderBottom: `1px solid ${C.line2}`, borderLeft: `1px solid ${C.soft2}` }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {lista.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", padding: 16, color: C.faint }}>Sin datos en el periodo</td></tr>}
+              {lista.map(([nm, q], i) => (
+                <tr key={nm} style={{ background: i % 2 ? C.soft : "#fff" }}>
+                  <td style={{ padding: "11px 16px", fontWeight: 600, display: "flex", alignItems: "center", gap: 10 }}><span style={{ width: 28, height: 28, borderRadius: 14, background: C.orange, color: "#fff", fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{nm[0]}</span>{nm}</td>
+                  {cell(q.v, "v")}{cell(q.t, "t")}{cell(q.d, "d")}
+                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 13, color: C.muted }}>{q.d ? Math.round(q.min / q.d) + " min" : "–"}</td>
+                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 17, fontWeight: 800, background: C.soft2 }}>{q.v + q.t + q.d}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot><tr style={{ borderTop: `2px solid ${C.line2}` }}>
+              <td style={{ padding: "11px 16px", fontWeight: 800, background: C.soft }}>Total</td>
+              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontWeight: 800, background: C.soft }}>{Tv.length}</td>
+              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontWeight: 800, background: C.soft }}>{L.length}</td>
+              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontWeight: 800, background: C.soft }}>{dev.length}</td>
+              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 13, color: C.muted, background: C.soft }}>{prom != null ? prom + " min" : "–"}</td>
+              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 17, fontWeight: 800, background: C.soft2 }}>{Tv.length + L.length + dev.length}</td>
+            </tr></tfoot>
+          </table>
+        </div>
+        {tecs.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", paddingTop: 8, borderTop: `1px solid ${C.soft2}` }}><span style={S.cap}>Reparó</span>{tecs.map(([t, v]) => <Chip key={t} l={titulo(t)} v={v} />)}</div>}
+      </div>
+    </div>
+  );
+}
+
+function DetalleModal({ seccion, T, L, P, periodoLabel, esHoy, onClose }) {
+  const Tv = T.filter((t) => t.status === "terminado");
+  const dev = P.filter(esContactada);
+  const fmt = (iso) => esHoy ? fmtHora(iso) : fmtDia(iso);
+  const Sec = ({ t, children }) => <div style={{ display: "flex", flexDirection: "column", gap: 7 }}><div style={S.cap}>{t}</div>{children}</div>;
+  const Lista = ({ rows }) => rows.length === 0 ? null : (
+    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+      <div style={S.cap}>Registros{rows.length >= 40 ? " · primeros 40" : ""}</div>
+      <div style={{ border: `1px solid ${C.line2}`, borderRadius: 10, overflow: "hidden", maxHeight: 280, overflowY: "auto" }}>
+        {rows.slice(0, 40).map((r, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", padding: "8px 12px", borderTop: i ? `1px solid ${C.soft2}` : "none" }}>
+            <div style={{ minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.a}</div><div style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.b}</div></div>
+            <span style={S.pill(r.bg, r.fg)}>{r.tag}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+  let titulo_, color, body;
+  if (seccion === "ventanilla") {
+    titulo_ = "Ventanilla"; color = C.orange;
+    body = <>
+      <Sec t="Resultado"><Barras pairs={cuenta(T, (t) => t.status === "anulado" ? "Anulado" : t.resultado)} color={color} total={T.length} /></Sec>
+      <Sec t="Quién registró"><Barras pairs={cuenta(Tv, "registrado_por_nombre")} color={color} total={Tv.length} /></Sec>
+      <Sec t="Quién reparó"><Barras pairs={cuenta(Tv.filter((t) => t.resultado !== SIN_PIEZA), "atendido_por_nombre")} color={C.orangeDark} /></Sec>
+      <Sec t="Por día"><Barras pairs={porDia(Tv, (t) => t.fecha + "T12:00:00")} color={color} /></Sec>
+      <Lista rows={T.map((t) => ({ a: `${t.numero} · ${t.cliente_nombre}`, b: `${t.modelo_codigo || ""} · ${titulo(t.atendido_por_nombre || "—")} · registró ${titulo(t.registrado_por_nombre || "—")} · ${fmt(t.terminado_at || t.created_at)}`, tag: t.status === "anulado" ? "Anulado" : t.resultado === SIN_PIEZA ? "Orientación" : t.resultado, bg: t.status === "anulado" ? C.redSoft : t.resultado === "Reparado" ? C.greenSoft : t.resultado === "Cliente no quiso reparar" ? C.orangeSoft : C.soft2, fg: t.status === "anulado" ? C.redDark : t.resultado === "Reparado" ? C.greenDark : t.resultado === "Cliente no quiso reparar" ? C.orangeDark : C.ink2 }))} />
+    </>;
+  } else if (seccion === "telefono") {
+    titulo_ = "Por teléfono"; color = MORADO;
+    body = <>
+      <Sec t="Resultado"><Barras pairs={cuenta(L, (l) => estadoLlamada(l).t)} color={color} total={L.length} /></Sec>
+      <Sec t="Quién atendió"><Barras pairs={cuenta(L, "registrado_por")} color={color} total={L.length} /></Sec>
+      <Sec t="Por día"><Barras pairs={porDia(L, (l) => l.created_at)} color={color} /></Sec>
+      <Lista rows={L.map((l) => { const st = estadoLlamada(l); return { a: `${l.cliente_nombre} · ${fmtTel(l.cliente_telefono)}`, b: `${[l.municipio, l.problema].filter(Boolean).join(" · ")} · atendió ${titulo(l.registrado_por || "—")} · ${fmt(l.created_at)}`, tag: st.t, bg: st.b, fg: st.c }; })} />
+    </>;
+  } else {
+    titulo_ = "Perdidas y voicemail"; color = C.red;
+    const rpm = {}; dev.forEach((p) => { (rpm[titulo((p.cerrada_por || "—").toLowerCase())] = rpm[titulo((p.cerrada_por || "—").toLowerCase())] || []).push(p.minutos_respuesta || 0); });
+    body = <>
+      <Sec t="Resultado"><Barras pairs={cuenta(P, (p) => p.estado !== "cerrada" ? "Abierta" : RES_LABEL(p.resultado))} color={color} total={P.length} /></Sec>
+      <Sec t="Quién devolvió"><Barras pairs={cuenta(dev, "cerrada_por")} color={C.green} total={dev.length} /></Sec>
+      <Sec t="Tiempo de respuesta (promedio por persona)"><Barras pairs={Object.entries(rpm).map(([k, a]) => [k, Math.round(a.reduce((x, y) => x + y, 0) / a.length)])} color={C.muted} /></Sec>
+      <Sec t="Por día"><Barras pairs={porDia(P, (p) => p.primera_llamada)} color={color} /></Sec>
+      <Lista rows={P.map((p) => { const [bg, fg] = p.estado !== "cerrada" ? [C.soft2, C.ink2] : RES_COLOR(p.resultado); return { a: `${fmtTel(p.telefono)}${p.nombre_cid ? " · " + p.nombre_cid : ""}`, b: `${p.tiene_voicemail ? "voicemail · " : ""}${p.estado === "cerrada" ? "cerró " + titulo(p.cerrada_por || "—") : "abierta"}${p.minutos_respuesta != null ? " · " + Math.round(p.minutos_respuesta) + " min" : ""} · ${fmt(p.primera_llamada)}`, tag: p.estado !== "cerrada" ? "Abierta" : RES_LABEL(p.resultado), bg, fg }; })} />
+    </>;
+  }
+  return (
+    <Modal titulo={titulo_} onClose={onClose} ancho={620}>
+      <div style={{ ...S.cap, marginTop: -4 }}>{periodoLabel}</div>
+      {body}
+    </Modal>
+  );
+}
+
+// Tooltip al pasar el mouse (Recepción usa estilos inline, el CSS se inyecta una vez)
+const TIP_CSS = `
+.rtipw{position:relative;display:inline-flex}
+.rtipw>.rtip{position:absolute;bottom:calc(100% + 8px);left:0;min-width:210px;max-width:280px;background:#1C1917;color:#fff;font-size:12px;font-weight:500;line-height:1.4;text-align:left;padding:10px 12px;border-radius:10px;box-shadow:0 12px 30px -12px rgba(0,0,0,.5);opacity:0;visibility:hidden;transform:translateY(4px);transition:opacity .15s,transform .15s;z-index:60;pointer-events:none}
+.rtipw>.rtip b{color:#fff;font-weight:700}
+.rtipw>.rtip::after{content:"";position:absolute;top:100%;left:22px;border:6px solid transparent;border-top-color:#1C1917}
+.rtipw:hover>.rtip,.rtipw:focus-within>.rtip{opacity:1;visibility:visible;transform:translateY(0)}
+`;
+function Tip({ texto, children, style }) {
+  return <span className="rtipw" style={style}>{children}<span className="rtip" dangerouslySetInnerHTML={{ __html: texto }} /></span>;
+}
+const TIP_RES = {
+  "Enviado a San Juan": "Se le dio la solución: el cliente va al centro de <b>San Juan</b>. Queda como <b>Devuelta y atendida</b>.",
+  "Enviado a San Germán": "Se le dio la solución: el cliente va al centro de <b>San Germán</b>. Queda como <b>Devuelta y atendida</b>.",
+  "Referido a técnicos": "El caso pasa al <b>equipo técnico</b>. Queda como <b>Devuelta · pendiente técnico</b> hasta que el técnico lo llame.",
+  "Se resolvió": "El problema se resolvió <b>en la misma llamada</b>. Queda como <b>Devuelta y atendida</b>.",
+};
 
 export default function Recepcion() {
   const { empleados, modelos } = useCatalogos();
@@ -197,6 +434,27 @@ export default function Recepcion() {
       .order("terminado_at", { ascending: false }).limit(1000)
       .then(({ data }) => { setBitLista(data || []); setBitCargando(false); });
   }, [bit, filtroB, rangoB]);
+
+  // ---------- Resumen gerencial (periodo propio: ventanilla + teléfono + perdidas) ----------
+  const [filtroR, setFiltroR] = useState("hoy");
+  const [rangoR, setRangoR] = useState({ desde: fechaDesdeB("mes"), hasta: hoyPR() });
+  const [resT, setResT] = useState([]); const [resL, setResL] = useState([]); const [resP, setResP] = useState([]);
+  const [resCargando, setResCargando] = useState(false);
+  const [detalleSec, setDetalleSec] = useState(null);
+  const rDesde = filtroR === "rango" ? rangoR.desde : filtroR === "hoy" ? hoyPR() : fechaDesdeB(filtroR);
+  const rHasta = filtroR === "rango" ? rangoR.hasta : hoyPR();
+  const perLabelR = filtroR === "hoy" ? "hoy" : filtroR === "semana" ? "esta semana" : filtroR === "mes" ? "este mes" : `${rangoR.desde} a ${rangoR.hasta}`;
+  useEffect(() => {
+    if (bit !== "resumen" || !rDesde || !rHasta) return;
+    let vivo = true; setResCargando(true);
+    const tope = new Date(rHasta + "T23:59:59-04:00").getTime();
+    Promise.all([
+      supabase.from("turnos_completos").select("*").eq("tipo", "ventanilla").in("status", ["terminado", "anulado"]).gte("fecha", rDesde).lte("fecha", rHasta).order("terminado_at", { ascending: false }).limit(2000).then(({ data }) => data || []),
+      llamadasDesde(rDesde + "T00:00:00-04:00").then((d) => (d || []).filter((l) => new Date(l.created_at).getTime() <= tope)).catch(() => []),
+      perdidasPorRango(rDesde, rHasta).catch(() => []),
+    ]).then(([t, l, p]) => { if (!vivo) return; setResT(t); setResL(l); setResP(p); setResCargando(false); });
+    return () => { vivo = false; };
+  }, [bit, filtroR, rangoR, rDesde, rHasta]);
 
   // ---------- Llamadas perdidas / voicemail (MareyApp) ----------
   const [perdidas, setPerdidas] = useState([]);
@@ -286,7 +544,55 @@ export default function Recepcion() {
   const limpiar = () => { setF(vacio); setFl(vacioL); setHist([]); setCliente(null); setDevolviendo(null); };
 
   // Lo que ve esta pantalla: abiertas + la que este usuario esta atendiendo. Las que tomo otro (Carlos en MareyApp) desaparecen.
-  const perdidasVisibles = perdidas.filter((p) => p.estado === "abierta" || (regNombre && p.tomada_por && p.tomada_por.toLowerCase() === regNombre.toLowerCase()));
+  const ahoraMs = Date.now();
+  const noCerradas = perdidas.filter((p) => {
+    const mia = regNombre && p.tomada_por && p.tomada_por.toLowerCase() === regNombre.toLowerCase();
+    return p.estado === "abierta" || mia;
+  });
+  // Nuevas: nunca se han llamado. Reintento: ya se les llamó y no contestaron (dormidas o listas para decidir).
+  const perdidasNuevas = noCerradas.filter((p) => (p.intentos || 0) === 0);
+  const perdidasReintento = noCerradas
+    .filter((p) => (p.intentos || 0) >= 1)
+    .sort((a, b) => ((b.intentos || 0) >= 2 ? 1 : 0) - ((a.intentos || 0) >= 2 ? 1 : 0));
+  const perdidasVisibles = noCerradas;
+
+  // Una fila de la lista de perdidas (se reusa en Nuevas y en Reintento)
+  const filaPerdida = (p) => {
+    const mia = p.tomada_por && regNombre && p.tomada_por.toLowerCase() === regNombre.toLowerCase();
+    const decidir = (p.intentos || 0) >= 2 && p.estado !== "cerrada";
+    const dormida = p.dormida_hasta && new Date(p.dormida_hasta).getTime() > ahoraMs;
+    const minsFalta = dormida ? Math.max(1, Math.ceil((new Date(p.dormida_hasta).getTime() - ahoraMs) / 60000)) : 0;
+    const urg = decidir || (!dormida && p.estado === "abierta" && (ahoraMs - new Date(p.primera_llamada)) > 15 * 60000);
+    const btn = (bg, fg, border) => ({ height: 38, padding: "0 16px", borderRadius: 10, border: border || "none", background: bg, color: fg, fontSize: 14, fontWeight: 700, flex: "none" });
+    return (
+      <div key={p.id} style={{ padding: "12px 18px", borderTop: `1px solid ${C.soft2}`, borderLeft: urg ? `3px solid ${C.red}` : "3px solid transparent", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.2 }}>{fmtTel(p.telefono)}</div>
+          {p.nombre_cid && <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.nombre_cid}</div>}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+            <span style={S.pill(p.tiene_voicemail ? C.moradoSoft : C.orangeSoft, p.tiene_voicemail ? C.moradoDark : C.orangeDark)}>{p.tiene_voicemail ? `Voicemail${p.voicemail_seg ? " · " + p.voicemail_seg + "s" : ""}` : "Perdida"}</span>
+            {p.veces > 1 && <span style={S.pill(C.redSoft, C.redDark)}>Llamó {p.veces} veces</span>}
+            {decidir && <span style={S.pill(C.redSoft, C.redDark)}>{p.intentos} intentos · decidir</span>}
+            {!decidir && dormida && <span style={S.pill(C.orangeSoft, C.orangeDark)}>{p.intentos} {p.intentos === 1 ? "intento" : "intentos"} · vuelve en {minsFalta} min</span>}
+            {!decidir && !dormida && p.intentos > 0 && <span style={S.pill(C.soft2, C.ink2)}>{p.intentos} {p.intentos === 1 ? "intento" : "intentos"} sin contestar</span>}
+            {mia && <span style={S.pill(C.greenSoft, C.greenDark)}>La estás atendiendo</span>}
+          </div>
+          {p.voicemail_url && (audios[p.id]
+            ? <audio controls src={audios[p.id]} style={{ width: "100%", maxWidth: 420, height: 34, marginTop: 8 }} />
+            : <button type="button" onClick={() => escucharVm(p)} style={{ height: 32, padding: "0 12px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.moradoDark, fontSize: 13, fontWeight: 700, marginTop: 8 }}>Escuchar voicemail</button>)}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10, flex: "none" }}>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: urg ? C.red : C.ink2 }}>{hace(p.ultima_llamada)}</div>
+            <div style={{ fontSize: 11, color: C.faint }}>{fmtHora(p.ultima_llamada)}</div>
+          </div>
+          {mia
+            ? <button type="button" onClick={() => devolver(p)} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>Continuar</button>
+            : <button type="button" onClick={() => devolver(p)} style={btn(decidir ? C.red : MORADO, "#fff")}>{decidir ? "Decidir" : "Atender"}</button>}
+        </div>
+      </div>
+    );
+  };
 
   // Atender: la toma (desaparece de la lista del otro) y abre el formulario de llamada con el telefono puesto
   const devolver = (p) => {
@@ -296,20 +602,34 @@ export default function Recepcion() {
   };
   const accionPerdida = async (fn) => { try { await fn(); } catch (e) { setLlMsg({ ok: false, t: e.message }); } cargarPerdidas(); };
   const limpiarAtendiendo = () => { setDevolviendo(null); setF(vacio); setFl(vacioL); setHist([]); setCliente(null); setBit("perdidas"); };
-  // No contesto: suma un intento y la suelta para que vuelva a la lista; al tercero se cierra sola
+  // No contestó: la función RPC ya suma el intento y la deja dormida 30 min (1er) o lista para decidir (2do). Nunca cierra sola.
   const noContestoAtendiendo = async () => {
     const p = devolviendo; if (!p) return;
     await accionPerdida(async () => {
       const n = await perdidaNoContesto(p.id, regNombre);
-      if (n < 3) await perdidaSoltar(p.id);
-      setLlMsg({ ok: true, t: n >= 3 ? `${fmtTel(p.telefono)} cerrada: no contestó en 3 intentos.` : `${fmtTel(p.telefono)} vuelve a la lista · ${n} ${n === 1 ? "intento" : "intentos"} sin contestar.` });
+      setLlMsg({ ok: true, t: n >= 2 ? `${fmtTel(p.telefono)} llegó al 2do intento. Queda para decidir.` : `${fmtTel(p.telefono)} no contestó. Vuelve a la lista dormida 30 min.` });
     });
     limpiarAtendiendo();
   };
-  const spamAtendiendo = async () => {
+  // Decisión tras el 2do intento: cerrar como "Devuelta, no contestó"
+  const cerrarNoContestoAtendiendo = async () => {
     const p = devolviendo; if (!p) return;
-    await accionPerdida(() => perdidaCerrar(p.id, "spam", regNombre));
-    setLlMsg({ ok: true, t: `${fmtTel(p.telefono)} marcada como spam.` });
+    await accionPerdida(() => perdidaCerrar(p.id, "no_contesta", regNombre));
+    setLlMsg({ ok: true, t: `${fmtTel(p.telefono)} cerrada: no contestó en 2 intentos.` });
+    limpiarAtendiendo();
+  };
+  // Ya estaba atendido: el cliente ya había sido atendido o lo resolvió por su cuenta.
+  const yaAtendidoAtendiendo = async () => {
+    const p = devolviendo; if (!p) return;
+    await accionPerdida(() => perdidaCerrar(p.id, "ya_atendido", regNombre));
+    setLlMsg({ ok: true, t: `${fmtTel(p.telefono)} cerrada: ya estaba atendido.` });
+    limpiarAtendiendo();
+  };
+  // No aplica: número equivocado, llamada repetida o basura.
+  const noAplicaAtendiendo = async () => {
+    const p = devolviendo; if (!p) return;
+    await accionPerdida(() => perdidaCerrar(p.id, "no_aplica", regNombre));
+    setLlMsg({ ok: true, t: `${fmtTel(p.telefono)} marcada como no aplica.` });
     limpiarAtendiendo();
   };
   // Cancelar: la suelta y vuelve a la lista de los dos
@@ -328,7 +648,9 @@ export default function Recepcion() {
       // si venia de una llamada perdida, se cierra como devuelta y queda enlazada
       const idL = typeof res === "string" ? res : (res && (res.id || (Array.isArray(res) && res[0] && res[0].id))) || null;
       const dv = devolviendo;
-      if (dv) { try { await perdidaCerrar(dv.id, "contestada", regNombre, idL); } catch (_) { /* no bloquea el guardado */ } }
+      // San Juan / San Germán / Se resolvió = atendida. Referido a técnicos = pendiente del técnico.
+      const resPerdida = r.status === "pendiente_willy" ? "pendiente_tecnico" : "atendida";
+      if (dv) { try { await perdidaCerrar(dv.id, resPerdida, regNombre, idL); } catch (_) { /* no bloquea el guardado */ } }
       setLlMsg({ ok: true, t: dv ? `Llamada devuelta a ${f.nombre.trim()} · ${r.label}.` : `Llamada de ${f.nombre.trim()} guardada en MareyApp · ${r.label}.` });
       limpiar(); setBit(dv ? "perdidas" : "llamadas"); cargarLista(); cargarPerdidas();
     } catch (e) { setLlMsg({ ok: false, t: e.message }); }
@@ -634,13 +956,28 @@ export default function Recepcion() {
           <div style={{ ...S.card, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "12px 18px", flex: "none" }}>
               <div style={{ display: "flex", gap: 2, background: C.soft2, borderRadius: 10, padding: 3 }}>
-                {[["turnos", "Turnos"], ["llamadas", "Llamadas"], ["perdidas", "Por devolver"]].map(([k, l]) => (
+                {[["resumen", "Resumen"], ["turnos", "Turnos"], ["llamadas", "Llamadas"], ["perdidas", "Por devolver"]].map(([k, l]) => (
                   <button key={k} type="button" onClick={() => setBit(k)} style={{ ...S.seg(bit === k), minHeight: 32, padding: "0 14px", fontSize: 13, borderRadius: 8, display: "flex", gap: 6 }}>
                     {l}{k === "perdidas" && perdidas.length > 0 && <span style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: C.red, color: "#fff", fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{perdidas.length}</span>}
                   </button>
                 ))}
               </div>
-              {bit === "llamadas" ? (
+              {bit === "resumen" ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {filtroR === "rango" && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input type="date" value={rangoR.desde} max={rangoR.hasta} onChange={(e) => setRangoR({ ...rangoR, desde: e.target.value })} aria-label="Desde" style={{ ...S.input, height: 30, width: 140, fontSize: 12, padding: "0 8px" }} />
+                      <span style={{ fontSize: 12, color: C.faint }}>a</span>
+                      <input type="date" value={rangoR.hasta} min={rangoR.desde} max={hoyPR()} onChange={(e) => setRangoR({ ...rangoR, hasta: e.target.value })} aria-label="Hasta" style={{ ...S.input, height: 30, width: 140, fontSize: 12, padding: "0 8px" }} />
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {[["hoy", "Hoy"], ["semana", "Semana"], ["mes", "Mes"], ["rango", "Rango"]].map(([k, l]) => (
+                      <button key={k} type="button" onClick={() => setFiltroR(k)} style={{ height: 30, padding: "0 12px", borderRadius: 15, border: "none", fontSize: 12, fontWeight: filtroR === k ? 700 : 600, background: filtroR === k ? C.orange : "transparent", color: filtroR === k ? "#fff" : C.muted }}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+              ) : bit === "llamadas" ? (
                 <div style={{ display: "flex", gap: 4 }}>
                   {[["hoy", "Hoy"], ["semana", "Semana"], ["mes", "Mes"], ["ano", "Año"]].map(([k, l]) => (
                     <button key={k} type="button" onClick={() => setFiltro(k)} style={{ height: 30, padding: "0 12px", borderRadius: 15, border: "none", fontSize: 12, fontWeight: filtro === k ? 700 : 600, background: filtro === k ? MORADO : "transparent", color: filtro === k ? "#fff" : C.muted }}>{l}</button>
@@ -671,44 +1008,26 @@ export default function Recepcion() {
                 )}
             </div>
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+              {bit === "resumen" && <ResumenView T={resT} L={resL} P={resP} abiertasCount={perdidas.filter((p) => p.estado !== "cerrada").length} cargando={resCargando} onDetalle={setDetalleSec} />}
               {bit === "perdidas" && <MiniPerdidas abiertas={perdidas} cerradas={perdidasCerr} />}
               {bit === "perdidas" && perdidasVisibles.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>Todo devuelto. Cuando entre una llamada perdida o un voicemail aparece aquí.</div>}
-              {bit === "perdidas" && perdidasVisibles.map((p) => {
-                const mia = p.tomada_por && regNombre && p.tomada_por.toLowerCase() === regNombre.toLowerCase();
-                const urg = p.estado === "abierta" && (Date.now() - new Date(p.primera_llamada)) > 15 * 60000;
-                const btn = (bg, fg, border) => ({ height: 38, padding: "0 16px", borderRadius: 10, border: border || "none", background: bg, color: fg, fontSize: 14, fontWeight: 700, flex: "none" });
-                return (
-                  <div key={p.id} style={{ padding: "12px 18px", borderTop: `1px solid ${C.soft2}`, borderLeft: urg ? `3px solid ${C.red}` : "3px solid transparent", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.2 }}>{fmtTel(p.telefono)}</div>
-                      {p.nombre_cid && <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.nombre_cid}</div>}
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
-                        <span style={S.pill(p.tiene_voicemail ? C.moradoSoft : C.orangeSoft, p.tiene_voicemail ? C.moradoDark : C.orangeDark)}>{p.tiene_voicemail ? `Voicemail${p.voicemail_seg ? " · " + p.voicemail_seg + "s" : ""}` : "Perdida"}</span>
-                        {p.veces > 1 && <span style={S.pill(C.redSoft, C.redDark)}>Llamó {p.veces} veces</span>}
-                        {p.intentos > 0 && <span style={S.pill(C.soft2, C.ink2)}>{p.intentos} {p.intentos === 1 ? "intento" : "intentos"} sin contestar</span>}
-                        {mia && <span style={S.pill(C.greenSoft, C.greenDark)}>La estás atendiendo</span>}
-                      </div>
-                      {p.voicemail_url && (audios[p.id]
-                        ? <audio controls src={audios[p.id]} style={{ width: "100%", maxWidth: 420, height: 34, marginTop: 8 }} />
-                        : <button type="button" onClick={() => escucharVm(p)} style={{ height: 32, padding: "0 12px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.moradoDark, fontSize: 13, fontWeight: 700, marginTop: 8 }}>Escuchar voicemail</button>)}
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10, flex: "none" }}>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: urg ? C.red : C.ink2 }}>{hace(p.ultima_llamada)}</div>
-                        <div style={{ fontSize: 11, color: C.faint }}>{fmtHora(p.ultima_llamada)}</div>
-                      </div>
-                      {mia
-                        ? <button type="button" onClick={() => devolver(p)} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>Continuar</button>
-                        : <button type="button" onClick={() => devolver(p)} style={btn(MORADO, "#fff")}>Atender</button>}
-                    </div>
-                  </div>
-                );
-              })}
+              {bit === "perdidas" && perdidasNuevas.length > 0 && (
+                <>
+                  <SecHead dot={C.orange} t="Nuevas" n={perdidasNuevas.length} d="Perdidas y voicemails que todavía nadie ha devuelto." />
+                  {perdidasNuevas.map(filaPerdida)}
+                </>
+              )}
+              {bit === "perdidas" && perdidasReintento.length > 0 && (
+                <>
+                  <SecHead dot={C.red} t="Se llamó · el cliente no contestó" n={perdidasReintento.length} d="Ya se les devolvió la llamada y no contestaron · esperan el 2do intento o una decisión." />
+                  {perdidasReintento.map(filaPerdida)}
+                </>
+              )}
               {bit === "perdidas" && perdidasCerr.length > 0 && (
                 <>
-                  <div style={{ ...S.cap, padding: "14px 18px 6px", borderTop: `1px solid ${C.soft2}` }}>Devueltas · últimos 7 días</div>
+                  <SecHead dot={C.green} t="Atendidas · últimos 7 días" n={perdidasCerr.length} d="Devueltas y cerradas." />
                   {perdidasCerr.map((p) => {
-                    const r = { contestada: ["Devuelta", C.greenSoft, C.greenDark], no_contesta: ["No contestó", C.redSoft, C.redDark], spam: ["Spam", C.soft2, C.ink2], no_aplica: ["No aplica", C.soft2, C.ink2] }[p.resultado] || [p.resultado, C.soft2, C.ink2];
+                    const [rbg, rfg] = RES_COLOR(p.resultado); const r = [RES_LABEL(p.resultado), rbg, rfg];
                     return (
                       <div key={p.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "9px 18px", borderTop: `1px solid ${C.soft2}`, alignItems: "center", fontSize: 13 }}>
                         <div style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}><b>{fmtTel(p.telefono)}</b> <span style={{ color: C.faint }}>· {p.cerrada_por || "—"}{p.minutos_respuesta != null ? ` · ${Math.round(p.minutos_respuesta)} min` : ""}{p.intentos ? ` · ${p.intentos} intentos` : ""} · {fmtDia(p.cerrada_at)} {fmtHora(p.cerrada_at)}</span></div>
@@ -764,9 +1083,12 @@ export default function Recepcion() {
         </div>
       </div>
 
+      {/* ---------- Detalle de una sección del resumen ---------- */}
+      {detalleSec && <DetalleModal seccion={detalleSec} T={resT} L={resL} P={resP} periodoLabel={perLabelR} esHoy={filtroR === "hoy"} onClose={() => setDetalleSec(null)} />}
+
       {/* ---------- Atender llamada perdida: ventana con la info del cliente ---------- */}
       {devolviendo && (
-        <Modal titulo={`Atender · ${fmtTel(devolviendo.telefono)}`} onClose={cancelarAtendiendo}>
+        <Modal titulo={`Atender · ${fmtTel(devolviendo.telefono)}`} onClose={cancelarAtendiendo} ancho={620} align="center">
           <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "min(560px, 100%)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13, color: C.ink2 }}>
               <span>
@@ -802,16 +1124,22 @@ export default function Recepcion() {
 
             {llMsg && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: llMsg.ok ? "#E1F5EE" : C.redSoft, color: llMsg.ok ? "#0F6E56" : C.redDark }}>{llMsg.t}</div>}
             {sinUsuarioLl && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: C.orangeSoft, color: C.orangeDark }}>{regNombre} no tiene usuario en MareyApp. Escoge otra persona en "Atiende".</div>}
+            <style>{TIP_CSS}</style>
             <div style={S.cap}>{okL ? "¿Qué pasó? · se guarda y la llamada queda devuelta" : `Falta: ${faltanL.join(", ")}`}</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
               {RESULTADOS_LLAMADA.map((r) => (
-                <button key={r.label} type="button" onClick={() => guardarLlamada(r)} disabled={!okL || busy}
-                  style={{ height: 46, padding: "0 8px", borderRadius: 12, border: "none", fontSize: 14, fontWeight: 700, color: "#fff", background: okL ? r.color : C.gris }}>{r.label}</button>
+                <Tip key={r.label} texto={TIP_RES[r.label] || r.label} style={{ display: "block" }}>
+                  <button type="button" onClick={() => guardarLlamada(r)} disabled={!okL || busy}
+                    style={{ width: "100%", height: 46, padding: "0 8px", borderRadius: 12, border: "none", fontSize: 14, fontWeight: 700, color: "#fff", background: okL ? r.color : C.gris }}>{r.label}</button>
+                </Tip>
               ))}
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", paddingTop: 10, borderTop: `1px solid ${C.soft2}` }}>
-              <button type="button" onClick={noContestoAtendiendo} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: C.orange, color: "#fff", fontSize: 13, fontWeight: 700 }}>{(devolviendo.intentos || 0) >= 2 ? "No contestó · cerrar" : "No contestó"}</button>
-              <button type="button" onClick={spamAtendiendo} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 13, fontWeight: 700 }}>Spam</button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", paddingTop: 10, borderTop: `1px solid ${C.soft2}`, flexWrap: "wrap" }}>
+              {(devolviendo.intentos || 0) >= 2
+                ? <Tip texto="Se intentó <b>2 veces</b> y el cliente no contestó. Se cierra como <b>Devuelta, no contestó</b>."><button type="button" onClick={cerrarNoContestoAtendiendo} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: C.red, color: "#fff", fontSize: 13, fontWeight: 700 }}>Cerrar · no contestó</button></Tip>
+                : <Tip texto="El cliente no cogió. <b>1er intento:</b> vuelve dormida 30 min. <b>2do intento:</b> queda para decidir."><button type="button" onClick={noContestoAtendiendo} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: C.orange, color: "#fff", fontSize: 13, fontWeight: 700 }}>No contestó</button></Tip>}
+              <Tip texto="El cliente <b>ya había sido atendido</b> o lo resolvió por su cuenta. Se cierra como contactado, sin gestión nueva."><button type="button" onClick={yaAtendidoAtendiendo} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 700 }}>Ya estaba atendido</button></Tip>
+              <Tip texto="Número equivocado, llamada repetida o basura. Se descarta."><button type="button" onClick={noAplicaAtendiendo} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 13, fontWeight: 700 }}>No aplica</button></Tip>
               <button type="button" onClick={cancelarAtendiendo} style={{ marginLeft: "auto", border: "none", background: "transparent", color: C.muted, fontSize: 13, fontWeight: 600, textDecoration: "underline" }}>Cancelar · vuelve a la lista</button>
             </div>
           </div>
