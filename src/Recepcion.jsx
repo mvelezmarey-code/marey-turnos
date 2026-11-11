@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
-import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA, SALIDAS, RAZONES_NINGUNO } from "./lib.js";
+import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, hoyPR, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA, SALIDAS, RAZONES_NINGUNO } from "./lib.js";
 import { Header, Leaderboard, Expediente, BuscadorExpediente, Modal } from "./components.jsx";
 import { catalogoLlamadas, llamadasPorTelefono, llamadasDesde, registrarLlamada, estadoLlamada, esCitado, RESULTADOS_LLAMADA, MORADO,
   perdidasAbiertas, perdidasCerradas, perdidaTomar, perdidaSoltar, perdidaNoContesto, perdidaCerrar, suscribirPerdidas, urlVoicemail, fmtTel, hace, beep } from "./llamadas.js";
@@ -17,6 +17,14 @@ const desdeFiltro = (k) => {
   return d.toISOString();
 };
 const MAX_FILA = 4;
+// Rango de fechas (YYYY-MM-DD en hora de PR) para la bitacora: hoy / semana / mes / rango
+const fechaDesdeB = (k) => {
+  const hoy = hoyPR();
+  const d = new Date(hoy + "T12:00:00");
+  if (k === "semana") d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  if (k === "mes") d.setDate(1);
+  return d.toISOString().slice(0, 10);
+};
 // Mensajes de garantía para copiar y pegar (botones arriba en la barra)
 const GARANTIAS = [
   { k: "nuevo", label: "Garantía nuevo", texto: "GARANTÍA Y DEVOLUCIONES: Las unidades nuevas cuentan con 5 años de garantía en piezas y 1 año en servicio, aplicable únicamente a defectos de fábrica. No cubre daños por instalación incorrecta, sedimentos debido a la calidad del agua ni fluctuaciones de voltaje. Se aceptan devoluciones dentro de los primeros 7 días laborables, siempre que la unidad no haya sido instalada.\n\nADVERTENCIA: Las unidades de gas no deben instalarse en lugares donde puedan mojarse o quedar expuestas directamente a la lluvia o al agua." },
@@ -174,6 +182,22 @@ export default function Recepcion() {
   const cargarLista = () => llamadasDesde(desdeFiltro(filtro)).then((d) => setLista(d || [])).catch(() => setLista([]));
   useEffect(() => { if (bit === "llamadas") cargarLista(); }, [bit, filtro]); // eslint-disable-line
 
+  // ---------- Bitacora de turnos por periodo (hoy viene en vivo de useTurnos; el resto se consulta) ----------
+  const [filtroB, setFiltroB] = useState("hoy");
+  const [rangoB, setRangoB] = useState({ desde: fechaDesdeB("mes"), hasta: hoyPR() });
+  const [bitLista, setBitLista] = useState([]);
+  const [bitCargando, setBitCargando] = useState(false);
+  useEffect(() => {
+    if (bit !== "turnos" || filtroB === "hoy") return;
+    const desde = filtroB === "rango" ? rangoB.desde : fechaDesdeB(filtroB);
+    const hasta = filtroB === "rango" ? rangoB.hasta : hoyPR();
+    if (!desde || !hasta) return;
+    setBitCargando(true);
+    supabase.from("turnos_completos").select("*").eq("tipo", "ventanilla").in("status", ["terminado", "anulado"]).gte("fecha", desde).lte("fecha", hasta)
+      .order("terminado_at", { ascending: false }).limit(1000)
+      .then(({ data }) => { setBitLista(data || []); setBitCargando(false); });
+  }, [bit, filtroB, rangoB]);
+
   // ---------- Llamadas perdidas / voicemail (MareyApp) ----------
   const [perdidas, setPerdidas] = useState([]);
   const [perdidasCerr, setPerdidasCerr] = useState([]);
@@ -239,6 +263,8 @@ export default function Recepcion() {
   const espera = fila.filter((t) => t.status === "espera").length;
   const arreglando = fila.filter((t) => t.status === "en_proceso").length;
   const bitacora = hoy.filter((t) => t.tipo === "ventanilla");
+  const esHistorial = filtroB !== "hoy";
+  const bitVista = esHistorial ? bitLista : bitacora;
   const cerrados = bitacora.filter((t) => t.status === "terminado").length;
 
   const faltan = [];
@@ -264,7 +290,7 @@ export default function Recepcion() {
 
   // Atender: la toma (desaparece de la lista del otro) y abre el formulario de llamada con el telefono puesto
   const devolver = (p) => {
-    setDevolviendo(p); setTipo("llamada"); setBit("perdidas");
+    setDevolviendo(p); setBit("perdidas"); setLlMsg(null);
     setF({ ...vacio, telefono: fmtTel(p.telefono) }); setFl(vacioL); setCliente(null);
     if (p.estado === "abierta" && regNombre) perdidaTomar(p.id, regNombre).then(cargarPerdidas).catch(() => {});
   };
@@ -424,17 +450,6 @@ export default function Recepcion() {
             </label>
           </div>
 
-          {devolviendo && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderRadius: 10, background: C.orangeSoft, color: C.orangeDark, fontSize: 13, flex: "none" }}>
-              <div style={{ fontWeight: 700 }}>Atendiendo llamada perdida{devolviendo.tiene_voicemail ? " · voicemail" : ""}</div>
-              <div>{fmtTel(devolviendo.telefono)}{devolviendo.nombre_cid ? ` · ${devolviendo.nombre_cid}` : ""} · llamó {devolviendo.veces} {devolviendo.veces === 1 ? "vez" : "veces"}{devolviendo.intentos ? ` · ${devolviendo.intentos} ${devolviendo.intentos === 1 ? "intento" : "intentos"} sin contestar` : ""}</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <button type="button" onClick={noContestoAtendiendo} style={{ height: 34, padding: "0 12px", borderRadius: 10, border: "none", background: C.orange, color: "#fff", fontSize: 13, fontWeight: 700 }}>{(devolviendo.intentos || 0) >= 2 ? "No contestó · cerrar" : "No contestó"}</button>
-                <button type="button" onClick={spamAtendiendo} style={{ height: 34, padding: "0 12px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 13, fontWeight: 700 }}>Spam</button>
-                <button type="button" onClick={cancelarAtendiendo} style={{ marginLeft: "auto", border: "none", background: "transparent", color: C.orangeDark, fontSize: 12, fontWeight: 700, textDecoration: "underline" }}>Cancelar</button>
-              </div>
-            </div>
-          )}
           <div style={{ ...S.segWrap, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
             <button type="button" onClick={() => setTipo("ventanilla")} style={S.seg(tipo === "ventanilla")}><span style={S.dot(tipo === "ventanilla" ? C.orange : C.gris)} />Reparación</button>
             <button type="button" onClick={() => setTipo("llamada")} style={S.seg(tipo === "llamada")}><span style={S.dot(tipo === "llamada" ? MORADO : C.gris)} />Llamada</button>
@@ -619,7 +634,7 @@ export default function Recepcion() {
           <div style={{ ...S.card, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "12px 18px", flex: "none" }}>
               <div style={{ display: "flex", gap: 2, background: C.soft2, borderRadius: 10, padding: 3 }}>
-                {[["turnos", "Bitácora de hoy"], ["llamadas", "Llamadas"], ["perdidas", "Por devolver"]].map(([k, l]) => (
+                {[["turnos", "Turnos"], ["llamadas", "Llamadas"], ["perdidas", "Por devolver"]].map(([k, l]) => (
                   <button key={k} type="button" onClick={() => setBit(k)} style={{ ...S.seg(bit === k), minHeight: 32, padding: "0 14px", fontSize: 13, borderRadius: 8, display: "flex", gap: 6 }}>
                     {l}{k === "perdidas" && perdidas.length > 0 && <span style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: C.red, color: "#fff", fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{perdidas.length}</span>}
                   </button>
@@ -637,7 +652,23 @@ export default function Recepcion() {
                   <button type="button" onClick={cargarPerdidas} style={{ height: 30, padding: "0 12px", borderRadius: 15, border: `1px solid ${C.soft2}`, background: "transparent", fontSize: 12, fontWeight: 600, color: C.ink2 }}>Actualizar</button>
                 </div>
               )
-                : <div style={{ fontSize: 13, color: C.faint }}>{bitacora.length} cerrados hoy</div>}
+                : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <div style={{ fontSize: 13, color: C.faint }}>{bitCargando ? "Cargando..." : esHistorial ? `${bitLista.length} en el periodo` : `${bitacora.length} cerrados hoy`}</div>
+                    {filtroB === "rango" && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <input type="date" value={rangoB.desde} max={rangoB.hasta} onChange={(e) => setRangoB({ ...rangoB, desde: e.target.value })} aria-label="Desde" style={{ ...S.input, height: 30, width: 140, fontSize: 12, padding: "0 8px" }} />
+                        <span style={{ fontSize: 12, color: C.faint }}>a</span>
+                        <input type="date" value={rangoB.hasta} min={rangoB.desde} max={hoyPR()} onChange={(e) => setRangoB({ ...rangoB, hasta: e.target.value })} aria-label="Hasta" style={{ ...S.input, height: 30, width: 140, fontSize: 12, padding: "0 8px" }} />
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {[["hoy", "Hoy"], ["semana", "Semana"], ["mes", "Mes"], ["rango", "Rango"]].map(([k, l]) => (
+                        <button key={k} type="button" onClick={() => setFiltroB(k)} style={{ height: 30, padding: "0 12px", borderRadius: 15, border: "none", fontSize: 12, fontWeight: filtroB === k ? 700 : 600, background: filtroB === k ? C.orange : "transparent", color: filtroB === k ? "#fff" : C.muted }}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
             </div>
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {bit === "perdidas" && <MiniPerdidas abiertas={perdidas} cerradas={perdidasCerr} />}
@@ -667,7 +698,7 @@ export default function Recepcion() {
                         <div style={{ fontSize: 11, color: C.faint }}>{fmtHora(p.ultima_llamada)}</div>
                       </div>
                       {mia
-                        ? <button type="button" onClick={() => { if (!devolviendo || devolviendo.id !== p.id) devolver(p); else setTipo("llamada"); }} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>Continuar</button>
+                        ? <button type="button" onClick={() => devolver(p)} style={btn("#fff", C.ink2, `1px solid ${C.line2}`)}>Continuar</button>
                         : <button type="button" onClick={() => devolver(p)} style={btn(MORADO, "#fff")}>Atender</button>}
                     </div>
                   </div>
@@ -703,15 +734,19 @@ export default function Recepcion() {
                   </div>
                 );
               })}
-              {bit === "turnos" && bitacora.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>Todavía no hay turnos terminados ni anulados.</div>}
-              {bit === "turnos" && bitacora.map((t) => {
+              {bit === "turnos" && bitVista.length === 0 && !bitCargando && <div style={{ padding: 24, textAlign: "center", fontSize: 14, color: C.faint, borderTop: `1px solid ${C.soft2}` }}>{esHistorial ? "No hay turnos en este periodo." : "Todavía no hay turnos terminados ni anulados."}</div>}
+              {bit === "turnos" && bitVista.map((t) => {
                 const an = t.status === "anulado";
                 return (
                   <div key={t.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 18px", borderTop: `1px solid ${C.soft2}`, alignItems: "center" }}>
                     <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
                       <div style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: C.orange, width: 46, flex: "none" }}>{t.numero}</div>
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600 }}>{t.cliente_nombre}</div>
+                        <div style={{ fontSize: 14, fontWeight: 600, display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                          <span>{t.cliente_nombre}</span>
+                          {(t.cliente_telefono || t.telefono) && <span style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: C.ink2 }}>{fmtTel(t.cliente_telefono || t.telefono)}</span>}
+                          {esHistorial && <span style={{ fontSize: 12, fontWeight: 500, color: C.faint }}>{fmtDia(t.terminado_at || t.created_at)}</span>}
+                        </div>
                         <div style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {an ? nm(t.modelo_codigo) + " · anulado por " + titulo(t.anulado_por_nombre)
                             : [nm(t.modelo_codigo), t.piezas, titulo(t.atendido_por_nombre), t.segundos_servicio != null ? fmtMMSS(t.segundos_servicio * 1000) : null,
@@ -728,6 +763,60 @@ export default function Recepcion() {
           </div>
         </div>
       </div>
+
+      {/* ---------- Atender llamada perdida: ventana con la info del cliente ---------- */}
+      {devolviendo && (
+        <Modal titulo={`Atender · ${fmtTel(devolviendo.telefono)}`} onClose={cancelarAtendiendo}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "min(560px, 100%)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13, color: C.ink2 }}>
+              <span>
+                <span style={S.pill(devolviendo.tiene_voicemail ? C.moradoSoft : C.orangeSoft, devolviendo.tiene_voicemail ? C.moradoDark : C.orangeDark)}>{devolviendo.tiene_voicemail ? "Voicemail" : "Perdida"}</span>
+                {devolviendo.nombre_cid ? ` ${devolviendo.nombre_cid} ·` : ""} llamó {devolviendo.veces} {devolviendo.veces === 1 ? "vez" : "veces"}{devolviendo.intentos ? ` · ${devolviendo.intentos} ${devolviendo.intentos === 1 ? "intento" : "intentos"} sin contestar` : ""}
+              </span>
+              <span style={{ ...S.cap, display: "flex", alignItems: "center", gap: 8 }}>Atiende
+                <select value={regId || ""} onChange={(e) => setRegId(Number(e.target.value))} aria-label="Quién atiende" style={{ ...S.select, width: "auto", height: 34, borderRadius: 17, fontSize: 13, fontWeight: 700, paddingLeft: 12 }}>
+                  {registradores.map((r) => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+                </select>
+              </span>
+            </div>
+            {devolviendo.voicemail_url && (audios[devolviendo.id]
+              ? <audio controls src={audios[devolviendo.id]} style={{ width: "100%", height: 34 }} />
+              : <button type="button" onClick={() => escucharVm(devolviendo)} style={{ height: 34, padding: "0 12px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.moradoDark, fontSize: 13, fontWeight: 700, alignSelf: "flex-start" }}>Escuchar voicemail</button>)}
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+              <label style={S.label}>Teléfono<input type="tel" value={f.telefono} onChange={set("telefono")} style={{ ...S.input, fontWeight: 700 }} /></label>
+              <div style={S.label}>Pueblo<Combo items={cat.municipios} valueId={fl.municipio_id} onPick={escogerPueblo} label="Pueblo" /></div>
+            </div>
+            <label style={S.label}>Nombre<input autoFocus value={f.nombre} onChange={set("nombre")} style={S.input} /></label>
+            {hist.length > 0 && <div style={{ fontSize: 13, color: C.moradoDark, fontWeight: 600 }}>Llamó {hist.length} {hist.length === 1 ? "vez" : "veces"} antes · {hist[0].problema || hist[0].modelo || ""} · {estadoLlamada(hist[0]).t}</div>}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+              <div style={S.label}>Modelo<Combo items={cat.modelos} valueId={fl.modelo_id} onPick={(id) => setFl((p) => ({ ...p, modelo_id: id }))} label="Modelo" /></div>
+              <label style={S.label}>Hace cuánto la tiene
+                <select value={fl.antiguedad_id} onChange={(e) => setFl({ ...fl, antiguedad_id: e.target.value })} style={S.select}>
+                  <option value="">Escoge</option>
+                  {cat.antiguedad.map((a) => <option key={a.id} value={a.id}>{a.rango}</option>)}
+                </select>
+              </label>
+            </div>
+            <label style={S.label}>Problema<input value={fl.problema} onChange={(e) => setFl({ ...fl, problema: e.target.value })} placeholder="Breve descripción" style={S.input} /></label>
+
+            {llMsg && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: llMsg.ok ? "#E1F5EE" : C.redSoft, color: llMsg.ok ? "#0F6E56" : C.redDark }}>{llMsg.t}</div>}
+            {sinUsuarioLl && <div style={{ fontSize: 13, fontWeight: 600, padding: "8px 12px", borderRadius: 10, background: C.orangeSoft, color: C.orangeDark }}>{regNombre} no tiene usuario en MareyApp. Escoge otra persona en "Atiende".</div>}
+            <div style={S.cap}>{okL ? "¿Qué pasó? · se guarda y la llamada queda devuelta" : `Falta: ${faltanL.join(", ")}`}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+              {RESULTADOS_LLAMADA.map((r) => (
+                <button key={r.label} type="button" onClick={() => guardarLlamada(r)} disabled={!okL || busy}
+                  style={{ height: 46, padding: "0 8px", borderRadius: 12, border: "none", fontSize: 14, fontWeight: 700, color: "#fff", background: okL ? r.color : C.gris }}>{r.label}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", paddingTop: 10, borderTop: `1px solid ${C.soft2}` }}>
+              <button type="button" onClick={noContestoAtendiendo} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: C.orange, color: "#fff", fontSize: 13, fontWeight: 700 }}>{(devolviendo.intentos || 0) >= 2 ? "No contestó · cerrar" : "No contestó"}</button>
+              <button type="button" onClick={spamAtendiendo} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2, fontSize: 13, fontWeight: 700 }}>Spam</button>
+              <button type="button" onClick={cancelarAtendiendo} style={{ marginLeft: "auto", border: "none", background: "transparent", color: C.muted, fontSize: 13, fontWeight: 600, textDecoration: "underline" }}>Cancelar · vuelve a la lista</button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {buscar && (
         <Modal titulo="Expediente del cliente" onClose={() => { setBuscar(false); setQ(""); }}>
