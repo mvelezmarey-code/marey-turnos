@@ -46,17 +46,18 @@ export function Leaderboard({ titulo: t, rows, campo, unidad, max = 5 }) {
   );
 }
 
-// Ventana encima de la pantalla (para el expediente)
-export function Modal({ titulo: t, onClose, children, ancho = 760 }) {
+// Ventana encima de la pantalla. El fondo se pone borroso (blur) y oscurecido.
+// align: "top" (por defecto, para el expediente) | "center" (para Atender)
+export function Modal({ titulo: t, onClose, children, ancho = 760, align = "top" }) {
   useEffect(() => {
     const k = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [onClose]);
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(28,25,23,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "48px 24px" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(28,25,23,0.40)", backdropFilter: "blur(7px)", WebkitBackdropFilter: "blur(7px)", display: "flex", alignItems: align === "center" ? "center" : "flex-start", justifyContent: "center", padding: "48px 24px" }}>
       <div onClick={(e) => e.stopPropagation()} role="dialog" aria-label={t}
-        style={{ width: ancho, maxWidth: "100%", maxHeight: "100%", background: C.bg, borderRadius: 20, boxShadow: "0 30px 60px -20px rgba(28,25,23,0.45)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        style={{ width: ancho, maxWidth: "100%", maxHeight: "100%", background: C.bg, borderRadius: 20, boxShadow: "0 30px 70px -20px rgba(28,25,23,0.55)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", background: "#fff", borderBottom: `1px solid ${C.line}` }}>
           <div style={{ fontSize: 18, fontWeight: 700 }}>{t}</div>
           <button type="button" onClick={onClose} style={{ ...S.ghost, height: 38 }}>Cerrar</button>
