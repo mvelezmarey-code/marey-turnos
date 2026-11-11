@@ -544,10 +544,13 @@ export default function Recepcion() {
   const limpiar = () => { setF(vacio); setFl(vacioL); setHist([]); setCliente(null); setDevolviendo(null); };
 
   // Lo que ve esta pantalla: abiertas + la que este usuario esta atendiendo. Las que tomo otro (Carlos en MareyApp) desaparecen.
+  // Si una llamada lleva mas de LOCK_MIN minutos "tomada" sin cerrarse, se considera abandonada y vuelve a la lista de todos.
+  const LOCK_MIN = 15;
   const ahoraMs = Date.now();
   const noCerradas = perdidas.filter((p) => {
     const mia = regNombre && p.tomada_por && p.tomada_por.toLowerCase() === regNombre.toLowerCase();
-    return p.estado === "abierta" || mia;
+    const abandonada = p.estado === "tomada" && (!p.tomada_at || (ahoraMs - new Date(p.tomada_at).getTime()) > LOCK_MIN * 60000);
+    return p.estado === "abierta" || mia || abandonada;
   });
   // Nuevas: nunca se han llamado. Reintento: ya se les llamó y no contestaron (dormidas o listas para decidir).
   const perdidasNuevas = noCerradas.filter((p) => (p.intentos || 0) === 0);
@@ -857,8 +860,8 @@ export default function Recepcion() {
         {/* ---------- Columna derecha ---------- */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, flex: "none" }}>
-            {kpi("Por devolver", perdidas.length, perdidas.length ? C.red : C.ink,
-              <button type="button" onClick={() => setBit("perdidas")} style={{ height: 34, padding: "0 12px", borderRadius: 17, border: `1px solid ${perdidas.length ? C.red : C.line2}`, background: perdidas.length ? C.redSoft : "#fff", color: perdidas.length ? C.redDark : C.muted, fontSize: 13, fontWeight: 700, flex: "none" }}>Ver</button>)}
+            {kpi("Por devolver", perdidasVisibles.length, perdidasVisibles.length ? C.red : C.ink,
+              <button type="button" onClick={() => setBit("perdidas")} style={{ height: 34, padding: "0 12px", borderRadius: 17, border: `1px solid ${perdidasVisibles.length ? C.red : C.line2}`, background: perdidasVisibles.length ? C.redSoft : "#fff", color: perdidasVisibles.length ? C.redDark : C.muted, fontSize: 13, fontWeight: 700, flex: "none" }}>Ver</button>)}
             {kpi("Clientes en espera", espera, C.orangeDark)}
             {kpi("Reparando", arreglando, C.ink)}
             {kpi("Cerrados hoy", cerrados, C.green)}
@@ -958,7 +961,7 @@ export default function Recepcion() {
               <div style={{ display: "flex", gap: 2, background: C.soft2, borderRadius: 10, padding: 3 }}>
                 {[["resumen", "Resumen"], ["turnos", "Turnos"], ["llamadas", "Llamadas"], ["perdidas", "Por devolver"]].map(([k, l]) => (
                   <button key={k} type="button" onClick={() => setBit(k)} style={{ ...S.seg(bit === k), minHeight: 32, padding: "0 14px", fontSize: 13, borderRadius: 8, display: "flex", gap: 6 }}>
-                    {l}{k === "perdidas" && perdidas.length > 0 && <span style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: C.red, color: "#fff", fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{perdidas.length}</span>}
+                    {l}{k === "perdidas" && perdidasVisibles.length > 0 && <span style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: C.red, color: "#fff", fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{perdidasVisibles.length}</span>}
                   </button>
                 ))}
               </div>
@@ -985,7 +988,7 @@ export default function Recepcion() {
                 </div>
               ) : bit === "perdidas" ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ fontSize: 13, color: C.faint }}>{perdidas.length === 0 ? "Nada pendiente" : `${perdidas.length} por devolver · suena un aviso cuando entra una`}</div>
+                  <div style={{ fontSize: 13, color: C.faint }}>{perdidasVisibles.length === 0 ? "Nada pendiente" : `${perdidasVisibles.length} por devolver · suena un aviso cuando entra una`}</div>
                   <button type="button" onClick={cargarPerdidas} style={{ height: 30, padding: "0 12px", borderRadius: 15, border: `1px solid ${C.soft2}`, background: "transparent", fontSize: 12, fontWeight: 600, color: C.ink2 }}>Actualizar</button>
                 </div>
               )
