@@ -31,6 +31,13 @@ export async function perdidasCerradas(dias = 7) {
   if (error) throw new Error(error.message);
   return data || [];
 }
+// Todas las perdidas (abiertas y cerradas) cuya PRIMERA llamada cae en el rango [desde, hasta] (fechas YYYY-MM-DD, hora de PR)
+export async function perdidasPorRango(desde, hasta) {
+  const d0 = desde + "T00:00:00-04:00", d1 = hasta + "T23:59:59-04:00";
+  const { data, error } = await llamadasDb.from("v_llamadas_perdidas").select("*").gte("primera_llamada", d0).lte("primera_llamada", d1).order("primera_llamada", { ascending: false }).limit(2000);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
 export const perdidaTomar = (id, quien) => call("turnos_perdida_tomar", { p_id: id, p_quien: quien });
 export const perdidaSoltar = (id) => call("turnos_perdida_soltar", { p_id: id });
 export const perdidaNoContesto = (id, quien) => call("turnos_perdida_no_contesto", { p_id: id, p_quien: quien });
