@@ -42,7 +42,7 @@ const copiarTexto = async (t) => {
 const norm = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
 // Campo que se puede escribir o escoger de la lista (pueblo, modelo)
-function Combo({ items, valueId, onPick, placeholder = "Escribe o escoge", label }) {
+export function Combo({ items, valueId, onPick, placeholder = "Escribe o escoge", label }) {
   const elegido = items.find((m) => String(m.id) === String(valueId));
   const [texto, setTexto] = useState(elegido ? elegido.nombre : "");
   const [abierto, setAbierto] = useState(false);
@@ -933,9 +933,14 @@ export default function Recepcion() {
                   <div key={t.id} style={{ borderTop: `1px solid ${C.soft2}` }}>
                     <div style={{ display: "flex", gap: 12, padding: "10px 18px", alignItems: "center" }}>
                       <div style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: C.orange, width: 46, flex: "none" }}>{t.numero}</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 15, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.cliente_nombre}</div>
-                        <div style={{ fontSize: 12, color: C.faint }}>{nm(t.modelo_codigo)}{t.serial ? " · " + t.serial : ""}</div>
+                      {/* Modelo, teléfono y cliente con el mismo peso */}
+                      <div style={{ flex: 1, minWidth: 0, display: "flex", flexWrap: "wrap", columnGap: 18, rowGap: 4, alignItems: "flex-end" }}>
+                        {[["Modelo", nm(t.modelo_codigo) || "—", "0 0 auto"], ["Teléfono", fmtTel(t.cliente_telefono) || "—", "0 0 auto"], ["Cliente", t.cliente_nombre, "1 1 130px"]].map(([l, v, fx]) => (
+                          <div key={l} style={{ flex: fx, minWidth: 0, maxWidth: "100%", display: "flex", flexDirection: "column", gap: 1 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: C.faint, textTransform: "uppercase", letterSpacing: 0.6 }}>{l}</span>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{v}</span>
+                          </div>
+                        ))}
                       </div>
                       <span style={S.pill(proc ? C.orangeSoft : C.soft2, proc ? C.orangeDark : C.ink2)}>{proc ? titulo(t.atendido_por_nombre) + " · " + fmtMMSS(now - new Date(t.iniciado_at)) : "Espera " + fmtMMSS(now - new Date(t.created_at))}</span>
                       {anularId !== t.id && <button type="button" onClick={() => setAnularId(t.id)} style={{ flex: "none", height: 32, padding: "0 10px", borderRadius: 16, border: `1px solid ${C.line2}`, background: "#fff", color: C.red, fontSize: 12, fontWeight: 700 }}>Anular</button>}
