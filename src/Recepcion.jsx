@@ -157,7 +157,8 @@ function MiniPerdidas({ abiertas, cerradas }) {
   const vm = [...hoyAb, ...hoyCe].filter((p) => p.tiene_voicemail).length;
   const dev = hoyCe.filter(esContactada);
   const noCont = hoyCe.filter((p) => p.resultado === "no_contesta").length;
-  const pct = entraron ? Math.round(dev.length / entraron * 100) : 0;
+  const contesto = hoyCe.filter((p) => ["atendida", "contestada", "pendiente_tecnico"].includes(p.resultado)).length;
+  const pct = entraron ? Math.round(hoyCe.length / entraron * 100) : 0; // atendidas = ya se trabajaron
   const tiempo = promDevolver(hoyCe);
   const porQuien = (n) => promDevolver(hoyCe.filter((p) => p.cerrada_por === n));
   const por = {};
@@ -173,15 +174,15 @@ function MiniPerdidas({ abiertas, cerradas }) {
     <div style={{ padding: "12px 18px 14px", borderTop: `1px solid ${C.soft2}`, background: C.soft, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
         {tile("Hoy entraron", entraron)}
-        {tile("Voicemail", vm, C.moradoDark)}
-        {tile("Devueltas", dev.length, C.greenDark)}
-        {tile("No contestaron", noCont, noCont ? C.redDark : C.ink)}
+        {tile("Atendidas", hoyCe.length, C.greenDark)}
+        {tile("Cliente contestó", contesto)}
+        {tile("Cliente no contestó", noCont)}
         {tile("Promedio en devolver", tiempo ? `${tiempo.min} min` : "—")}
       </div>
       <div style={{ fontSize: 11, color: C.faint }}>Promedio en devolver: desde que entra la llamada hasta que alguien le da "Atender". Solo horas de trabajo. No cuenta las de "no aplica".</div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ flex: 1, height: 6, background: C.soft2, borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: C.green }} /></div>
-        <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, flex: "none" }}>{pct}% devueltas</div>
+        <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, flex: "none" }}>{pct}% atendidas{vm ? ` · ${vm} con voicemail` : ""}</div>
       </div>
       {personas.length > 0 && (
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: C.muted }}>
@@ -238,7 +239,10 @@ function ResumenView({ T, L, P, abiertasCount, cargando, onDetalle }) {
   const yaAt = P.filter((p) => p.resultado === "ya_atendido").length;
   const abiertasN = P.filter((p) => p.estado !== "cerrada").length;
   const vmP = P.filter((p) => p.tiene_voicemail).length;
-  const pct = P.length ? Math.round(dev.length / P.length * 100) : 0;
+  // Atendida = ya se trabajó: se le devolvió la llamada (contestara o no el cliente) o se revisó y no aplicaba.
+  const atendidasTot = P.length - abiertasN;
+  const contesto = atendidasN + pendTec; // se le devolvió y el cliente contestó
+  const pct = P.length ? Math.round(atendidasTot / P.length * 100) : 0;
   const nLl = (txt) => L.filter((l) => estadoLlamada(l).t === txt).length;
   // pivot: una fila por persona
   const per = {};
@@ -262,13 +266,14 @@ function ResumenView({ T, L, P, abiertasCount, cargando, onDetalle }) {
   const nPlural = (n, s, p2) => `${n} ${n === 1 ? s : (p2 || s + "s")}`;
   const reporte = [];
   reporte.push(`Entraron ${nPlural(P.length, "llamada perdida")}${vmP ? ` (${vmP} con voicemail)` : ""}.`);
-  if (dev.length) {
+  if (P.length) reporte.push(atendidasTot === P.length ? `Se atendieron todas (${pct}%).` : `Se atendieron ${atendidasTot} de ${P.length} (${pct}%).`);
+  if (contesto) {
     const sub = [];
     if (atendidasN) sub.push(`${atendidasN} se resolvieron o se enviaron a un centro`);
     if (pendTec) sub.push(`${pendTec} pasaron a técnicos`);
-    if (yaAt) sub.push(`${yaAt} ya no necesitaban ayuda`);
-    reporte.push(`Se les devolvió la llamada a ${dev.length} (${pct}%)${sub.length ? ": " + sub.join(", ") : ""}.`);
+    reporte.push(`En ${contesto} el cliente contestó${sub.length ? ": " + sub.join(", ") : ""}.`);
   }
+  if (yaAt) reporte.push(`${yaAt} ya no necesitaban ayuda.`);
   if (noc) reporte.push(`A ${noc} se les llamó y no contestaron.`);
   if (noAplica) reporte.push(`${noAplica} no aplicaban (número malo, repetida o basura).`);
   if (abiertasN) reporte.push(`${abiertasN === 1 ? "Queda 1 llamada" : `Quedan ${abiertasN} llamadas`} sin devolver.`);
@@ -293,13 +298,14 @@ function ResumenView({ T, L, P, abiertasCount, cargando, onDetalle }) {
         </div>
         <div style={can}>
           <div style={ch}><span style={S.dot(C.red)} />Perdidas y voicemail<button type="button" onClick={() => onDetalle("perdidas")} style={detBtn}>Detalle</button></div>
-          <div style={bign}>{dev.length}<span style={small}>devueltas de {P.length}</span>
+          <div style={bign}>{atendidasTot}<span style={small}>atendidas de {P.length}</span>
             <span style={{ flex: 1, minWidth: 60, height: 8, background: C.soft2, borderRadius: 4, overflow: "hidden", alignSelf: "center" }}><span style={{ display: "block", height: "100%", width: pct + "%", background: C.green }} /></span>
             <span style={{ fontSize: 14, fontWeight: 700, color: C.green }}>{pct}%</span>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            <Chip l="voicemail" v={vmP} c={C.moradoDark} /><Chip l="sin contestar" v={noc} c={noc ? C.red : C.ink} /><Chip l="no aplica" v={noAplica} /><Chip l="abiertas ahora" v={abiertasCount} c={abiertasCount ? C.red : C.ink} />
+            <Chip l="cliente contestó" v={contesto} c={C.greenDark} /><Chip l="cliente no contestó" v={noc} />{yaAt > 0 && <Chip l="ya estaban atendidas" v={yaAt} />}<Chip l="no aplicaban" v={noAplica} /><Chip l="por devolver ahora" v={abiertasCount} c={abiertasCount ? C.red : C.ink} />
           </div>
+          <div style={{ fontSize: 11, color: C.faint, lineHeight: 1.4 }}>Atendida: se le devolvió la llamada, contestara o no el cliente, o se revisó y no aplicaba.{vmP ? ` ${vmP} dejaron voicemail.` : ""}</div>
         </div>
       </div>
 
