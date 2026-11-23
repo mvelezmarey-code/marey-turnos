@@ -274,15 +274,14 @@ function ResumenView({ T, L, P, abiertasCount, cargando, onDetalle }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead><tr>
               <th style={{ textAlign: "left", padding: "11px 16px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: C.muted, fontWeight: 700, background: C.soft, borderBottom: `1px solid ${C.line2}` }}>Persona</th>
-              {["Ventanilla", "Teléfono", "Devueltas", "Resp.", "Total"].map((h) => <th key={h} style={{ textAlign: "right", padding: "11px 16px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: C.muted, fontWeight: 700, background: C.soft, borderBottom: `1px solid ${C.line2}`, borderLeft: `1px solid ${C.soft2}` }}>{h}</th>)}
+              {["Ventanilla", "Teléfono", "Devueltas", "Total"].map((h) => <th key={h} style={{ textAlign: "right", padding: "11px 16px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: C.muted, fontWeight: 700, background: C.soft, borderBottom: `1px solid ${C.line2}`, borderLeft: `1px solid ${C.soft2}` }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {lista.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", padding: 16, color: C.faint }}>Sin datos en el periodo</td></tr>}
+              {lista.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", padding: 16, color: C.faint }}>Sin datos en el periodo</td></tr>}
               {lista.map(([nm, q], i) => (
                 <tr key={nm} style={{ background: i % 2 ? C.soft : "#fff" }}>
                   <td style={{ padding: "11px 16px", fontWeight: 600, display: "flex", alignItems: "center", gap: 10 }}><span style={{ width: 28, height: 28, borderRadius: 14, background: C.orange, color: "#fff", fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{nm[0]}</span>{nm}</td>
                   {cell(q.v, "v")}{cell(q.t, "t")}{cell(q.d, "d")}
-                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 13, color: C.muted }}>{q.d ? Math.round(q.min / q.d) + " min" : "–"}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 17, fontWeight: 800, background: C.soft2 }}>{q.v + q.t + q.d}</td>
                 </tr>
               ))}
@@ -292,7 +291,6 @@ function ResumenView({ T, L, P, abiertasCount, cargando, onDetalle }) {
               <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontWeight: 800, background: C.soft }}>{Tv.length}</td>
               <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontWeight: 800, background: C.soft }}>{L.length}</td>
               <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontWeight: 800, background: C.soft }}>{dev.length}</td>
-              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 13, color: C.muted, background: C.soft }}>{prom != null ? prom + " min" : "–"}</td>
               <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: `1px solid ${C.soft2}`, padding: "11px 16px", fontSize: 17, fontWeight: 800, background: C.soft2 }}>{Tv.length + L.length + dev.length}</td>
             </tr></tfoot>
           </table>
