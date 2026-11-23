@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
-import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, hoyPR, useNow, useCatalogos, useTurnos, useLeaderboard, useVisitasVenta, rpc, LUGARES_COMPRA, SALIDAS, RAZONES_NINGUNO, SIN_PIEZA } from "./lib.js";
+import { C, S, mono, fmtMMSS, fmtHora, fmtDia, soloDigitos, titulo, hoyPR, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, LUGARES_COMPRA, SALIDAS, RAZONES_NINGUNO, SIN_PIEZA } from "./lib.js";
 import { Header, Leaderboard, Expediente, BuscadorExpediente, Modal } from "./components.jsx";
 import { catalogoLlamadas, llamadasPorTelefono, llamadasDesde, registrarLlamada, estadoLlamada, esCitado, RESULTADOS_LLAMADA, MORADO,
   perdidasAbiertas, perdidasCerradas, perdidasPorRango, perdidaTomar, perdidaSoltar, perdidaNoContesto, perdidaCerrar, suscribirPerdidas, urlVoicemail, fmtTel, hace, beep } from "./llamadas.js";
@@ -101,6 +101,10 @@ const esHoyPR = (iso) => iso && new Date(iso).toLocaleDateString("en-CA", { time
 // Resultados que cuentan como "devuelta y contactada" (incluye el valor viejo 'contestada')
 const CONTACTADA = ["atendida", "contestada", "pendiente_tecnico", "ya_atendido"];
 const esContactada = (p) => CONTACTADA.includes(p.resultado);
+// Cuándo entró la llamada y cuándo se le devolvió (hora en que se registró la devolución). Sin minutos de respuesta.
+const diaHora = (iso) => (iso ? `${esHoyPR(iso) ? "hoy" : fmtDia(iso)} ${fmtHora(iso)}` : "—");
+const SE_LLAMO = ["atendida", "contestada", "pendiente_tecnico", "no_contesta"];
+const entroYSalio = (p) => `entró ${diaHora(p.primera_llamada)}` + (p.estado === "cerrada" && p.cerrada_at ? ` · ${SE_LLAMO.includes(p.resultado) ? "se le llamó" : "se cerró"} ${diaHora(p.cerrada_at)}` : " · sin devolver");
 // Etiqueta legible de cada resultado de llamada perdida
 const RES_LABEL = (r) => ({ atendida: "Devuelta y atendida", contestada: "Devuelta y atendida", pendiente_tecnico: "Pendiente técnico", ya_atendido: "Ya estaba atendido", no_contesta: "Devuelta, no contestó", spam: "No aplica", no_aplica: "No aplica" })[r] || r;
 // Colores [fondo, texto] por resultado
@@ -112,7 +116,6 @@ function MiniPerdidas({ abiertas, cerradas }) {
   const vm = [...hoyAb, ...hoyCe].filter((p) => p.tiene_voicemail).length;
   const dev = hoyCe.filter(esContactada);
   const noCont = hoyCe.filter((p) => p.resultado === "no_contesta").length;
-  const prom = dev.length ? Math.round(dev.reduce((a, p) => a + (p.minutos_respuesta || 0), 0) / dev.length) : null;
   const pct = entraron ? Math.round(dev.length / entraron * 100) : 0;
   const por = {};
   hoyCe.forEach((p) => { if (!p.cerrada_por) return; const q = por[p.cerrada_por] || (por[p.cerrada_por] = { dev: 0, otras: 0, min: 0 }); if (esContactada(p)) { q.dev++; q.min += p.minutos_respuesta || 0; } else q.otras++; });
@@ -125,12 +128,11 @@ function MiniPerdidas({ abiertas, cerradas }) {
   );
   return (
     <div style={{ padding: "12px 18px 14px", borderTop: `1px solid ${C.soft2}`, background: C.soft, display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
         {tile("Hoy entraron", entraron)}
         {tile("Voicemail", vm, C.moradoDark)}
         {tile("Devueltas", dev.length, C.greenDark)}
         {tile("No contestaron", noCont, noCont ? C.redDark : C.ink)}
-        {tile("Respuesta", prom != null ? `${prom} min` : "—")}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ flex: 1, height: 6, background: C.soft2, borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: C.green }} /></div>
@@ -139,7 +141,7 @@ function MiniPerdidas({ abiertas, cerradas }) {
       {personas.length > 0 && (
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: C.muted }}>
           <span style={{ fontWeight: 700, color: C.ink2 }}>Quién atendió:</span>
-          {personas.map(([n, q]) => <span key={n}><b style={{ color: C.ink }}>{titulo(n)}</b> {q.dev} devuelta{q.dev !== 1 ? "s" : ""}{q.dev ? ` · ${Math.round(q.min / q.dev)} min` : ""}{q.otras ? ` · ${q.otras} sin contestar/no aplica` : ""}</span>)}
+          {personas.map(([n, q]) => <span key={n}><b style={{ color: C.ink }}>{titulo(n)}</b> {q.dev} devuelta{q.dev !== 1 ? "s" : ""}{q.otras ? ` · ${q.otras} sin contestar/no aplica` : ""}</span>)}
         </div>
       )}
     </div>
@@ -191,7 +193,6 @@ function ResumenView({ T, L, P, abiertasCount, cargando, onDetalle }) {
   const yaAt = P.filter((p) => p.resultado === "ya_atendido").length;
   const abiertasN = P.filter((p) => p.estado !== "cerrada").length;
   const vmP = P.filter((p) => p.tiene_voicemail).length;
-  const prom = dev.length ? Math.round(dev.reduce((a, p) => a + (p.minutos_respuesta || 0), 0) / dev.length) : null;
   const pct = P.length ? Math.round(dev.length / P.length * 100) : 0;
   const nLl = (txt) => L.filter((l) => estadoLlamada(l).t === txt).length;
   // pivot: una fila por persona
@@ -252,7 +253,7 @@ function ResumenView({ T, L, P, abiertasCount, cargando, onDetalle }) {
             <span style={{ fontSize: 14, fontWeight: 700, color: C.green }}>{pct}%</span>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            <Chip l="min respuesta" v={prom != null ? prom : "—"} /><Chip l="voicemail" v={vmP} c={C.moradoDark} /><Chip l="sin contestar" v={noc} c={noc ? C.red : C.ink} /><Chip l="no aplica" v={noAplica} /><Chip l="abiertas ahora" v={abiertasCount} c={abiertasCount ? C.red : C.ink} />
+            <Chip l="voicemail" v={vmP} c={C.moradoDark} /><Chip l="sin contestar" v={noc} c={noc ? C.red : C.ink} /><Chip l="no aplica" v={noAplica} /><Chip l="abiertas ahora" v={abiertasCount} c={abiertasCount ? C.red : C.ink} />
           </div>
         </div>
       </div>
@@ -339,13 +340,11 @@ function DetalleModal({ seccion, T, L, P, periodoLabel, esHoy, onClose }) {
     </>;
   } else {
     titulo_ = "Perdidas y voicemail"; color = C.red;
-    const rpm = {}; dev.forEach((p) => { (rpm[titulo((p.cerrada_por || "—").toLowerCase())] = rpm[titulo((p.cerrada_por || "—").toLowerCase())] || []).push(p.minutos_respuesta || 0); });
     body = <>
       <Sec t="Resultado"><Barras pairs={cuenta(P, (p) => p.estado !== "cerrada" ? "Abierta" : RES_LABEL(p.resultado))} color={color} total={P.length} /></Sec>
       <Sec t="Quién devolvió"><Barras pairs={cuenta(dev, "cerrada_por")} color={C.green} total={dev.length} /></Sec>
-      <Sec t="Tiempo de respuesta (promedio por persona)"><Barras pairs={Object.entries(rpm).map(([k, a]) => [k, Math.round(a.reduce((x, y) => x + y, 0) / a.length)])} color={C.muted} /></Sec>
       <Sec t="Por día"><Barras pairs={porDia(P, (p) => p.primera_llamada)} color={color} /></Sec>
-      <Lista rows={P.map((p) => { const [bg, fg] = p.estado !== "cerrada" ? [C.soft2, C.ink2] : RES_COLOR(p.resultado); return { a: `${fmtTel(p.telefono)}${p.nombre_cid ? " · " + p.nombre_cid : ""}`, b: `${p.tiene_voicemail ? "voicemail · " : ""}${p.estado === "cerrada" ? "cerró " + titulo(p.cerrada_por || "—") : "abierta"}${p.minutos_respuesta != null ? " · " + Math.round(p.minutos_respuesta) + " min" : ""} · ${fmt(p.primera_llamada)}`, tag: p.estado !== "cerrada" ? "Abierta" : RES_LABEL(p.resultado), bg, fg }; })} />
+      <Lista rows={P.map((p) => { const [bg, fg] = p.estado !== "cerrada" ? [C.soft2, C.ink2] : RES_COLOR(p.resultado); return { a: `${fmtTel(p.telefono)}${p.nombre_cid ? " · " + p.nombre_cid : ""}`, b: `${p.tiene_voicemail ? "voicemail · " : ""}${entroYSalio(p)}${p.estado === "cerrada" ? " · " + titulo(p.cerrada_por || "—") : ""}`, tag: p.estado !== "cerrada" ? "Abierta" : RES_LABEL(p.resultado), bg, fg }; })} />
     </>;
   }
   return (
@@ -378,7 +377,6 @@ export default function Recepcion() {
   const { empleados, modelos } = useCatalogos();
   const { abiertos, hoy, recargar } = useTurnos();
   const lbReg = useLeaderboard("leaderboard_registros_hoy");
-  const visitas = useVisitasVenta();
   const now = useNow();
   const nm = (c) => (modelos.find((m) => m.codigo === c) || {}).nombre || c;
   const modelosCombo = useMemo(() => modelos.map((m) => ({ id: m.codigo, nombre: m.nombre })), [modelos]);
@@ -397,7 +395,6 @@ export default function Recepcion() {
   const [q, setQ] = useState("");
   const [anularId, setAnularId] = useState(null);
   const [verHist, setVerHist] = useState(true);
-  const [ventaMsg, setVentaMsg] = useState(null);
   const [copiado, setCopiado] = useState(null); // { k, ok } del botón de garantía que se tocó
   // Decisión de Anthony: con qué se fue el cliente que no quiso reparar
   const [elegida, setElegida] = useState(null);
@@ -688,15 +685,6 @@ export default function Recepcion() {
     try { await rpc("anular_turno", { p_turno: t.id, p_empleado: regId, p_motivo: "Cliente se fue" }); recargar(); } catch (e) { setMsg({ ok: false, t: e.message }); }
   };
 
-  const sumarVenta = async () => {
-    if (!regId) return;
-    try { const n = await rpc("registrar_visita_venta", { p_empleado: regId }); visitas.setN(n); setVentaMsg({ ok: true, t: "Cliente de venta anotado" }); }
-    catch (e) { setVentaMsg({ ok: false, t: e.message }); }
-  };
-  const deshacerVenta = async () => {
-    try { const n = await rpc("deshacer_visita_venta", { p_empleado: regId }); visitas.setN(n); setVentaMsg({ ok: true, t: "Se quitó el último" }); }
-    catch (e) { setVentaMsg({ ok: false, t: e.message }); }
-  };
   useEffect(() => { setElegida(null); setRazon(null); setOtro(""); }, [dec && dec.id]);
   useEffect(() => { if (!decMsg) return; const t = setTimeout(() => setDecMsg(null), 5000); return () => clearTimeout(t); }, [decMsg]);
   const razonFinal = razon === "Otro" ? otro.trim() : razon;
@@ -718,7 +706,6 @@ export default function Recepcion() {
   const copiarGarantia = async (g) => { setCopiado({ k: g.k, ok: await copiarTexto(g.texto) }); };
   useEffect(() => { if (!copiado) return; const t = setTimeout(() => setCopiado(null), 2500); return () => clearTimeout(t); }, [copiado]);
 
-  useEffect(() => { if (!ventaMsg) return; const t = setTimeout(() => setVentaMsg(null), 4000); return () => clearTimeout(t); }, [ventaMsg]);
 
   const hint = !ok ? `Falta: ${faltan.join(", ")}`
     : (citado ? "Llegó a tienda (citado por teléfono) · " : "") + (espera === 0 ? "no hay fila, sale de primero en el iPad" : `entra #${espera + 1} en la lista`);
@@ -857,22 +844,13 @@ export default function Recepcion() {
 
         {/* ---------- Columna derecha ---------- */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, flex: "none" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12, flex: "none" }}>
             {kpi("Por devolver", perdidasVisibles.length, perdidasVisibles.length ? C.red : C.ink,
               <button type="button" onClick={() => setBit("perdidas")} style={{ height: 34, padding: "0 12px", borderRadius: 17, border: `1px solid ${perdidasVisibles.length ? C.red : C.line2}`, background: perdidasVisibles.length ? C.redSoft : "#fff", color: perdidasVisibles.length ? C.redDark : C.muted, fontSize: 13, fontWeight: 700, flex: "none" }}>Ver</button>)}
             {kpi("Clientes en espera", espera, C.orangeDark)}
             {kpi("Reparando", arreglando, C.ink)}
             {kpi("Cerrados hoy", cerrados, C.green)}
-            {kpi("Clientes de venta", visitas.n, C.blueDark,
-              <button type="button" onClick={sumarVenta} title="Toca una vez por cada cliente que vino a comprar o preguntar"
-                style={{ height: 34, padding: "0 12px", borderRadius: 17, border: `1px solid ${C.blue}`, background: C.blueSoft, color: C.blueDark, fontSize: 13, fontWeight: 700, flex: "none" }}>+ 1</button>)}
           </div>
-          {ventaMsg && (
-            <div style={{ marginTop: -8, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, fontSize: 12, fontWeight: 600, color: ventaMsg.ok ? C.blueDark : C.redDark, flex: "none" }}>
-              {ventaMsg.t}
-              {ventaMsg.ok && ventaMsg.t !== "Se quitó el último" && <button type="button" onClick={deshacerVenta} style={{ border: "none", background: "transparent", color: C.faint, fontSize: 12, fontWeight: 700, textDecoration: "underline" }}>Deshacer</button>}
-            </div>
-          )}
 
           {dec && (
             <div style={{ flex: "none", background: C.orangeSoft, border: `2px solid ${C.orange}`, borderRadius: 16, boxShadow: "0 14px 30px -18px rgba(180,83,9,0.55)", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1036,7 +1014,7 @@ export default function Recepcion() {
                     const [rbg, rfg] = RES_COLOR(p.resultado); const r = [RES_LABEL(p.resultado), rbg, rfg];
                     return (
                       <div key={p.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "9px 18px", borderTop: `1px solid ${C.soft2}`, alignItems: "center", fontSize: 13 }}>
-                        <div style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}><b>{fmtTel(p.telefono)}</b> <span style={{ color: C.faint }}>· {p.cerrada_por || "—"}{p.minutos_respuesta != null ? ` · ${Math.round(p.minutos_respuesta)} min` : ""}{p.intentos ? ` · ${p.intentos} intentos` : ""} · {fmtDia(p.cerrada_at)} {fmtHora(p.cerrada_at)}</span></div>
+                        <div style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}><b>{fmtTel(p.telefono)}</b> <span style={{ color: C.faint }}>· {entroYSalio(p)} · {p.cerrada_por || "—"}{p.intentos ? ` · ${p.intentos} intentos` : ""}</span></div>
                         <span style={S.pill(r[1], r[2])}>{r[0]}</span>
                       </div>
                     );
