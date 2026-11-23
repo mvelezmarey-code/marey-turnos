@@ -1,12 +1,16 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { C, S, mono, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, SIN_PIEZA, TZ } from "./lib.js";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "./supabase.js";
+import { C, S, mono, titulo, useNow, useCatalogos, useTurnos, useLeaderboard, rpc, SIN_PIEZA, TZ, LUGARES_COMPRA, soloDigitos } from "./lib.js";
 import { Leaderboard, PinPad } from "./components.jsx";
+import { Combo } from "./Recepcion.jsx";
+import { catalogoLlamadas, fmtTel } from "./llamadas.js";
 
 const NO_QUISO = "Cliente no quiso reparar";
 const minDesde = (ts, now) => (ts ? Math.max(0, Math.floor((now - new Date(ts)) / 60000)) : 0);
 const MIN = (seg) => (seg == null ? "—" : Math.round(seg / 60) + " min");
 const ESPERA_LARGA = 15; // minutos: el tiempo sale en rojo
 const MAX_FILAS = 4;
+const NUEVO_VACIO = { nombre: "", telefono: "", pueblo: "", modelo: "", compra: "" }; // los mismos datos que pide recepción
 const CIERRE_SEG = 8; // la pantalla de "terminado" se cierra sola y la sesión se acaba
 const sombra = "0 18px 40px -28px rgba(28,25,23,0.28)";
 const card = { background: "#fff", border: `1px solid ${C.line}`, borderRadius: 20, boxShadow: sombra };
@@ -63,9 +67,15 @@ export default function Reparacion() {
   const terminadosHoy = term.length + abiertos.filter((t) => t.tipo === "ventanilla" && t.status === "decision").length;
   const prom = (k) => { const v = term.map((t) => t[k]).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
 
-  const [screen, setScreen] = useState("list"); // list | pin | work | done
+  const [screen, setScreen] = useState("list"); // list | nuevo | pin | work | done
   const [turnoId, setTurnoId] = useState(null);
-  const [modoPin, setModoPin] = useState("iniciar"); // iniciar | continuar
+  const [modoPin, setModoPin] = useState("iniciar"); // iniciar | continuar | nuevo
+  // Cliente sin recepción: el técnico lo registra con el mismo formulario y lo atiende de una vez
+  const [nf, setNf] = useState(NUEVO_VACIO);
+  const [puebloId, setPuebloId] = useState("");
+  const [municipios, setMunicipios] = useState([]);
+  const [conocido, setConocido] = useState(null);
+  const creando = useRef(false);
   const [emp, setEmp] = useState(null);
   const [pin, setPin] = useState("");
   const [pinMsg, setPinMsg] = useState("");
@@ -100,6 +110,36 @@ export default function Reparacion() {
     return i >= 0 && ord[i].terminados > 0 ? { n: ord[i].terminados, pos: i + 1 } : null;
   })();
 
+  // ---------- Cliente sin recepción ----------
+  const modelosCombo = useMemo(() => modelos.map((m) => ({ id: m.codigo, nombre: m.nombre })), [modelos]);
+  useEffect(() => { catalogoLlamadas().then((d) => d && setMunicipios(d.municipios || [])).catch(() => {}); }, []);
+  const telN = soloDigitos(nf.telefono);
+  const escogerPueblo = (id) => {
+    const m = municipios.find((x) => String(x.id) === String(id));
+    setPuebloId(id); setNf((p) => ({ ...p, pueblo: m ? m.nombre : "" }));
+  };
+  // Cliente conocido por teléfono: llena nombre y pueblo (igual que recepción)
+  useEffect(() => {
+    if (screen !== "nuevo" || telN.length !== 10) { setConocido(null); return; }
+    supabase.from("clientes").select("*").eq("telefono", telN).maybeSingle().then(({ data }) => {
+      setConocido(data || null);
+      if (!data) return;
+      setNf((p) => ({ ...p, nombre: p.nombre || data.nombre, pueblo: p.pueblo || data.pueblo }));
+      const m = municipios.find((x) => x.nombre.toLowerCase() === String(data.pueblo || "").trim().toLowerCase());
+      if (m) setPuebloId((v) => v || String(m.id));
+    });
+  }, [telN, screen]); // eslint-disable-line
+  const faltanN = [];
+  if (telN.length !== 10) faltanN.push("teléfono (10 dígitos)");
+  if (!nf.pueblo.trim()) faltanN.push("pueblo");
+  if (!nf.nombre.trim()) faltanN.push("nombre");
+  if (!nf.modelo) faltanN.push("modelo");
+  if (!nf.compra) faltanN.push("dónde lo compró");
+  const okNuevo = faltanN.length === 0;
+  const abrirNuevo = () => { setNf(NUEVO_VACIO); setPuebloId(""); setConocido(null); setTurnoId(null); setScreen("nuevo"); };
+  const pedirPinNuevo = () => { if (!okNuevo) return; setTurnoId(null); setModoPin("nuevo"); setEmp(null); setPin(""); setPinMsg(""); setScreen("pin"); };
+  const cerrarPin = () => { if (modoPin === "nuevo") { setPin(""); setPinMsg(""); setScreen("nuevo"); } else volver(); };
+
   const limpiarTrabajo = () => { setStep(1); setSel([]); setRes(null); setCausa(null); setErr(""); setPop(null); setConfirmAnular(false); setNuevaPieza(null); setNuevaCausa(null); setAddMsg(""); setBusy(false); };
   const abrirPin = (t, modo) => { setTurnoId(t.id); setModoPin(modo); setEmp(modo === "continuar" ? tecnicos.find((x) => x.id === t.atendido_por) || null : null); setPin(""); setPinMsg(""); setScreen("pin"); };
   // Cerrar sesión: vuelve a la lista y se olvida del técnico (el próximo tiene que poner su PIN)
@@ -121,11 +161,26 @@ export default function Reparacion() {
     setBusy(true);
     try {
       const rows = await rpc("verificar_pin", { p_pin: pin, p_rol: "reparacion" });
-      if (!rows || !rows.find((r) => r.id === emp.id)) { setPin(""); setBusy(false); return setPinMsg("PIN incorrecto"); }
+      if (!rows || !rows.find((r) => r.id === emp.id)) { setPin(""); return setPinMsg("PIN incorrecto"); }
+      if (modoPin === "nuevo") {
+        // Lo registra y lo atiende el mismo técnico: el turno nace "Reparando", no pasa por la fila
+        if (creando.current) return;
+        creando.current = true;
+        try {
+          const t = await rpc("crear_turno", {
+            p_tipo: "ventanilla", p_registrado_por: emp.id, p_nombre: nf.nombre, p_telefono: telN, p_pueblo: nf.pueblo,
+            p_modelo: nf.modelo, p_serial: null, p_busca: null, p_tipo_cliente: null,
+            p_nota: null, p_atender_ahora: true, p_lugar_compra: nf.compra,
+          });
+          await recargar();
+          limpiarTrabajo(); setTurnoId(t.id); setNf(NUEVO_VACIO); setPuebloId(""); setConocido(null); setScreen("work");
+        } finally { creando.current = false; }
+        return;
+      }
       if (modoPin === "iniciar") await rpc("iniciar_turno", { p_turno: turnoId, p_empleado: emp.id });
       limpiarTrabajo(); setScreen("work"); recargar();
     } catch (e) { setPinMsg(e.message); setPin(""); }
-    setBusy(false);
+    finally { setBusy(false); }
   };
   // Con el tercer dígito entra solo (no hay que tocar "Empezar a reparar")
   useEffect(() => { if (screen === "pin" && emp && pin.length === 3) confirmarPin(); }, [pin, emp]); // eslint-disable-line
@@ -234,7 +289,14 @@ export default function Reparacion() {
 
   // ---------- Lista de espera (también se ve borrosa detrás del PIN) ----------
   const filas = lista.slice(0, MAX_FILAS);
-  const grid = { display: "grid", gridTemplateColumns: "96px minmax(0, 1fr) 150px 140px", gap: 20, alignItems: "center" };
+  const grid = { display: "grid", gridTemplateColumns: "clamp(72px, 8vw, 96px) minmax(0, 1fr) clamp(100px, 11vw, 140px) clamp(100px, 11vw, 140px)", gap: "clamp(12px, 1.5vw, 20px)", alignItems: "center" };
+  // Modelo, teléfono y cliente: los tres del mismo tamaño, cada uno con su etiqueta
+  const dato = (label, valor, flex, extra) => (
+    <div style={{ flex, minWidth: 0, maxWidth: "100%", display: "flex", flexDirection: "column", gap: 2 }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 700, color: "#A8A29E", textTransform: "uppercase", letterSpacing: 0.8 }}>{label}{extra}</span>
+      <span style={{ fontSize: "clamp(16px, 1.75vw, 21px)", lineHeight: 1.2, fontWeight: 700, letterSpacing: -0.2, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{valor}</span>
+    </div>
+  );
   const tile = (label, n, color, fuerte) => (
     <div style={{ height: 96, boxSizing: "border-box", borderRadius: 20, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between",
       ...(fuerte ? { background: C.orange, color: "#fff", boxShadow: "0 18px 34px -20px rgba(180,83,9,0.85)" } : { background: "#fff", border: `1px solid ${C.line}`, boxShadow: "0 18px 40px -30px rgba(28,25,23,0.3)" }) }}>
@@ -252,7 +314,7 @@ export default function Reparacion() {
         </div>
         <div style={{ ...card, flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <div style={{ ...grid, flex: "none", padding: "14px 22px 10px", fontSize: 11, fontWeight: 700, color: "#A8A29E", textTransform: "uppercase", letterSpacing: 0.8 }}>
-            <span style={{ textAlign: "center" }}>Fila</span><span>Cliente</span><span>Tiempo de espera</span><span />
+            <span style={{ textAlign: "center" }}>Fila</span><span>Datos del cliente</span><span>Tiempo de espera</span><span />
           </div>
           {lista.length === 0 && (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, borderTop: `1px solid ${C.soft2}` }}>
@@ -272,18 +334,15 @@ export default function Reparacion() {
                   <span style={proc ? { fontSize: 13, fontWeight: 700, letterSpacing: 0.3 } : { fontFamily: mono, fontSize: 36, fontWeight: 600, lineHeight: 1 }}>{proc ? "Reparando" : posFila(t)}</span>
                 </div>
                 <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                    <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.cliente_nombre}</span>
-                    {t.nota && <span style={{ ...S.pill(C.moradoSoft, C.morado), fontWeight: 700 }}>Llamó antes</span>}
+                  <div style={{ minWidth: 0, display: "flex", columnGap: "clamp(14px, 1.8vw, 24px)", alignItems: "flex-end" }}>
+                    {dato("Modelo", nm(t.modelo_codigo) || "—", "0 1 auto")}
+                    {dato("Teléfono", fmtTel(t.cliente_telefono) || "—", "0 0 auto")}
                   </div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden" }}>
-                    <span style={{ flex: "none", fontSize: 18, fontWeight: 700, color: C.orangeDark }}>{nm(t.modelo_codigo)}</span>
-                    <span style={{ fontSize: 14, color: C.faint, overflow: "hidden", textOverflow: "ellipsis" }}>{[proc ? "con " + titulo(t.atendido_por_nombre) : t.serial ? "Serie " + t.serial : null, t.lugar_compra].filter(Boolean).join(" · ")}</span>
-                  </div>
+                  {dato("Cliente", t.cliente_nombre, "0 0 auto", t.nota && <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 8, background: C.moradoSoft, color: C.morado, letterSpacing: 0.3 }}>Llamó antes</span>)}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                   <div style={{ fontFamily: mono, fontSize: 26, fontWeight: 600, letterSpacing: -0.5, lineHeight: 1, color: largo ? C.red : proc ? C.orangeDark : C.ink }}>{mins} min</div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: next ? C.orange : "#A8A29E" }}>{proc ? "reparando" : next ? "esperando · le toca" : "esperando"}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: next ? C.orange : "#A8A29E" }}>{proc ? "con " + titulo(t.atendido_por_nombre) : next ? "esperando · le toca" : "esperando"}</div>
                 </div>
                 {proc
                   ? <button type="button" onClick={() => abrirPin(t, "continuar")} style={{ height: 56, borderRadius: 14, fontSize: 17, fontWeight: 700, border: `1px solid ${C.line2}`, background: "#fff", color: C.ink2 }}>Continuar</button>
@@ -296,6 +355,10 @@ export default function Reparacion() {
             {lista.length > MAX_FILAS && <span style={{ fontWeight: 700, color: C.orangeDark }}>+ {lista.length - MAX_FILAS} más en la lista</span>}
           </div>
         </div>
+        <button type="button" onClick={abrirNuevo} style={{ flex: "none", height: 64, borderRadius: 16, border: "none", background: C.green, color: "#fff", fontSize: 19, fontWeight: 700, boxShadow: "0 10px 22px -10px rgba(21,128,61,0.7)", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          Atender cliente sin recepción
+        </button>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
@@ -318,27 +381,72 @@ export default function Reparacion() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.bg, overflow: "hidden", position: "relative" }}>
       {/* ---------- Lista + PIN encima (la lista se ve borrosa detrás) ---------- */}
-      {(screen === "list" || screen === "pin") && (
+      {(screen === "list" || (screen === "pin" && modoPin !== "nuevo")) && (
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", transition: "filter 0.25s", ...(screen === "pin" ? { filter: "blur(6px)", pointerEvents: "none" } : {}) }} aria-hidden={screen === "pin"}>
           <TopBar />
           {listaView}
         </div>
       )}
 
-      {screen === "pin" && turnoPin && (
+      {/* ---------- Cliente sin recepción: mismo formulario que recepción (se ve borroso detrás del PIN) ---------- */}
+      {(screen === "nuevo" || (screen === "pin" && modoPin === "nuevo")) && (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", transition: "filter 0.25s", ...(screen === "pin" ? { filter: "blur(6px)", pointerEvents: "none" } : {}) }} aria-hidden={screen === "pin"}>
+          <TopBar />
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", justifyContent: "center", padding: "16px 28px 26px" }}>
+            <form onSubmit={(e) => { e.preventDefault(); pedirPinNuevo(); }} style={{ ...card, width: 760, maxWidth: "100%", alignSelf: "flex-start", padding: "24px 28px", display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ ...S.cap, color: C.green, letterSpacing: 0.8 }}>Cliente sin recepción</div>
+                  <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4 }}>Nuevo cliente</div>
+                  <div style={{ fontSize: 15, color: C.faint }}>Los mismos datos que pide recepción. Al final pones tu PIN y lo atiendes de una vez.</div>
+                </div>
+                <button type="button" onClick={volver} style={{ ...S.ghost, flex: "none", height: 52, fontSize: 16 }}>Cancelar</button>
+              </div>
+              <div style={{ height: 1, background: C.soft2 }} />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14 }}>
+                <label style={S.label}>Teléfono<input type="tel" inputMode="tel" value={nf.telefono} onChange={(e) => setNf({ ...nf, telefono: e.target.value })} placeholder="787-000-0000" style={S.input} /></label>
+                <div style={S.label}>Pueblo
+                  {municipios.length > 0
+                    ? <Combo items={municipios} valueId={puebloId} onPick={escogerPueblo} label="Pueblo" />
+                    : <input value={nf.pueblo} onChange={(e) => setNf({ ...nf, pueblo: e.target.value })} style={S.input} />}
+                </div>
+              </div>
+              <label style={S.label}>Nombre<input value={nf.nombre} onChange={(e) => setNf({ ...nf, nombre: e.target.value })} style={S.input} /></label>
+              {conocido && <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: C.greenDark }}><span style={S.dot(C.green)} />Cliente conocido: {conocido.nombre} · {conocido.pueblo}</div>}
+              <div style={S.label}>Modelo
+                <Combo items={modelosCombo} valueId={nf.modelo} onPick={(id) => setNf((p) => ({ ...p, modelo: id }))} label="Modelo" />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={S.cap}>¿Dónde lo compró?</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {LUGARES_COMPRA.map((o) => <button key={o} type="button" onClick={() => setNf({ ...nf, compra: o })} style={{ ...S.chip(nf.compra === o), height: 48, padding: "0 18px", borderRadius: 24, fontSize: 16 }}>{o}</button>)}
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: okNuevo ? C.muted : C.redDark }}><span style={S.dot(okNuevo ? C.green : C.red)} />{okNuevo ? "Todo listo: toca el botón y pon tu PIN" : `Falta: ${faltanN.join(", ")}`}</div>
+                <button type="submit" disabled={!okNuevo} style={{ height: 68, borderRadius: 16, border: "none", fontSize: 20, fontWeight: 700, color: "#fff", ...(okNuevo ? { background: C.green, boxShadow: "0 10px 22px -10px rgba(21,128,61,0.7)" } : { background: C.gris }) }}>Registrar y atender ahora</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {screen === "pin" && (turnoPin || modoPin === "nuevo") && (
         <div style={{ position: "absolute", inset: 0, zIndex: 10, background: "rgba(28,25,23,0.28)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div role="dialog" aria-label="Poner PIN" style={{ width: 880, maxWidth: "100%", background: "#fff", borderRadius: 24, boxShadow: "0 40px 80px -30px rgba(28,25,23,0.55)", display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px", overflow: "hidden" }}>
             <div style={{ padding: "28px 30px", display: "flex", flexDirection: "column", gap: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                  <div style={{ ...S.cap, color: C.orange, letterSpacing: 0.8 }}>{modoPin === "iniciar" ? "Vas a reparar" : "Vas a continuar"}</div>
+                  <div style={{ ...S.cap, color: C.orange, letterSpacing: 0.8 }}>{modoPin === "nuevo" ? "Vas a registrar y atender" : modoPin === "iniciar" ? "Vas a reparar" : "Vas a continuar"}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-                    <span style={{ flex: "none", fontSize: 15, fontWeight: 700, color: "#fff", background: C.orange, padding: "5px 12px", borderRadius: 10 }}>{modoPin === "iniciar" ? posFila(turnoPin) + "º en fila" : "Reparando"}</span>
-                    <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{turnoPin.cliente_nombre}</span>
+                    <span style={{ flex: "none", fontSize: 15, fontWeight: 700, color: "#fff", background: modoPin === "nuevo" ? C.green : C.orange, padding: "5px 12px", borderRadius: 10 }}>{modoPin === "nuevo" ? "Sin recepción" : modoPin === "iniciar" ? posFila(turnoPin) + "º en fila" : "Reparando"}</span>
+                    <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{modoPin === "nuevo" ? nf.nombre.trim() : turnoPin.cliente_nombre}</span>
                   </div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><span style={{ fontSize: 19, fontWeight: 700, color: C.orangeDark }}>{nm(turnoPin.modelo_codigo)}</span><span style={{ fontSize: 15, color: C.faint }}>{turnoPin.serial && <>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turnoPin.serial}</span> · </>}esperando {minDesde(turnoPin.created_at, now)} min</span></div>
+                  {modoPin === "nuevo"
+                    ? <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><span style={{ fontSize: 19, fontWeight: 700, color: C.orangeDark }}>{nm(nf.modelo)}</span><span style={{ fontSize: 15, color: C.faint }}>{fmtTel(telN)} · {nf.pueblo} · queda registrado a tu nombre</span></div>
+                    : <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><span style={{ fontSize: 19, fontWeight: 700, color: C.orangeDark }}>{nm(turnoPin.modelo_codigo)}</span><span style={{ fontSize: 15, color: C.faint }}>{turnoPin.serial && <>Serie <span style={{ fontFamily: mono, color: C.ink }}>{turnoPin.serial}</span> · </>}esperando {minDesde(turnoPin.created_at, now)} min</span></div>}
                 </div>
-                <button type="button" onClick={volver} aria-label="Cerrar" style={{ flex: "none", width: 44, height: 44, borderRadius: 22, border: `1px solid ${C.line2}`, background: "#fff", color: C.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <button type="button" onClick={cerrarPin} aria-label="Cerrar" style={{ flex: "none", width: 44, height: 44, borderRadius: 22, border: `1px solid ${C.line2}`, background: "#fff", color: C.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
                 </button>
               </div>
@@ -347,7 +455,7 @@ export default function Reparacion() {
                 <div style={{ fontSize: 18, fontWeight: 700 }}>¿Quién eres?</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
                   {tecnicos.map((e) => {
-                    const off = modoPin === "continuar" && e.id !== turnoPin.atendido_por;
+                    const off = modoPin === "continuar" && turnoPin && e.id !== turnoPin.atendido_por;
                     const on = emp && emp.id === e.id;
                     return <button key={e.id} type="button" disabled={off} onClick={() => { setEmp(e); setPin(""); setPinMsg(""); }}
                       style={{ height: 64, borderRadius: 12, fontSize: 17, ...opcion(on), fontWeight: on ? 700 : 600, opacity: off ? 0.35 : 1 }}>{e.nombre}</button>;
@@ -361,7 +469,7 @@ export default function Reparacion() {
                 <div style={{ fontSize: 13, color: C.faint, marginTop: 4 }}>{emp ? "Los mismos 3 dígitos que usas para ponchar · entra solo" : "Toca tu nombre a la izquierda"}</div>
               </div>
               <div style={{ fontSize: 13, fontWeight: 600, color: C.red, minHeight: 18 }}>{pinMsg}</div>
-              <PinPad pin={pin} setPin={(v) => { setPin(v); setPinMsg(""); }} onOk={confirmarPin} ready={emp && pin.length === 3} okLabel={busy ? "Entrando..." : modoPin === "iniciar" ? "Empezar a reparar" : "Continuar"} />
+              <PinPad pin={pin} setPin={(v) => { setPin(v); setPinMsg(""); }} onOk={confirmarPin} ready={emp && pin.length === 3} okLabel={busy ? "Entrando..." : modoPin === "nuevo" ? "Registrar y atender" : modoPin === "iniciar" ? "Empezar a reparar" : "Continuar"} />
             </div>
           </div>
         </div>
@@ -521,7 +629,7 @@ export default function Reparacion() {
         </>
       )}
 
-      {(screen === "work" || screen === "pin") && !turnoPin && (
+      {(screen === "work" || (screen === "pin" && modoPin !== "nuevo")) && !turnoPin && (
         <div style={{ position: "absolute", inset: 0, zIndex: 20, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div style={{ ...card, padding: 36, width: 480, textAlign: "center", display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ fontSize: 20, fontWeight: 700 }}>Este turno ya no está abierto</div>
