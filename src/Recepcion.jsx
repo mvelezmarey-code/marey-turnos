@@ -101,10 +101,51 @@ const esHoyPR = (iso) => iso && new Date(iso).toLocaleDateString("en-CA", { time
 // Resultados que cuentan como "devuelta y contactada" (incluye el valor viejo 'contestada')
 const CONTACTADA = ["atendida", "contestada", "pendiente_tecnico", "ya_atendido"];
 const esContactada = (p) => CONTACTADA.includes(p.resultado);
-// Cuándo entró la llamada y cuándo se le devolvió (hora en que se registró la devolución). Sin minutos de respuesta.
-const diaHora = (iso) => (iso ? `${esHoyPR(iso) ? "hoy" : fmtDia(iso)} ${fmtHora(iso)}` : "—");
+// ---------- Tiempo en devolver una llamada perdida ----------
+// Empieza cuando entró la llamada (email de Verve) y termina cuando alguien le dio "Atender" en la app.
+// Si no hay "Atender" se usa el intento de "no contestó", y si tampoco, el cierre.
+// Solo cuenta horas de trabajo (lunes a sábado, 8:00 a.m. a 5:00 p.m., hora de PR) y solo llamadas desde el 23 de noviembre de 2026.
+const DEVOLVER_DESDE = "2026-11-23T00:00:00-04:00";
+const HORA_ABRE = 8, HORA_CIERRA = 17;
+const PR_MS = 4 * 3600000; // Puerto Rico es UTC-4 todo el año
 const SE_LLAMO = ["atendida", "contestada", "pendiente_tecnico", "no_contesta"];
-const entroYSalio = (p) => `entró ${diaHora(p.primera_llamada)}` + (p.estado === "cerrada" && p.cerrada_at ? ` · ${SE_LLAMO.includes(p.resultado) ? "se le llamó" : "se cerró"} ${diaHora(p.cerrada_at)}` : " · sin devolver");
+const diaHora = (iso) => (iso ? `${esHoyPR(iso) ? "hoy" : fmtDia(iso)} ${fmtHora(iso)}` : "—");
+// Primer momento registrado en que se atendió: [fecha ISO, verbo]
+const momentoDevuelta = (p) => {
+  const c = [[p.tomada_at, "se atendió"], [p.ultimo_intento, "se le llamó"], [p.cerrada_at, "se cerró"]].filter((x) => x[0]);
+  if (!c.length) return null;
+  return c.reduce((a, b) => (new Date(b[0]) < new Date(a[0]) ? b : a));
+};
+// Minutos entre dos momentos contando solo horas de trabajo
+const minLaborables = (iniIso, finIso) => {
+  const a = new Date(iniIso).getTime() - PR_MS, b = new Date(finIso).getTime() - PR_MS; // reloj de PR sobre UTC
+  if (!(b > a)) return 0;
+  let total = 0;
+  const dia = new Date(a); dia.setUTCHours(0, 0, 0, 0);
+  for (let d = dia.getTime(); d <= b; d += 86400000) {
+    if (new Date(d).getUTCDay() === 0) continue; // domingo no cuenta
+    const ini = Math.max(a, d + HORA_ABRE * 3600000), fin = Math.min(b, d + HORA_CIERRA * 3600000);
+    if (fin > ini) total += fin - ini;
+  }
+  return Math.round(total / 60000);
+};
+// Minutos que tardó en devolverse (null si entró antes del 23 de noviembre o sigue abierta)
+const minDevolver = (p) => {
+  if (p.estado !== "cerrada" || !p.primera_llamada || new Date(p.primera_llamada) < new Date(DEVOLVER_DESDE)) return null;
+  const m = momentoDevuelta(p);
+  return m ? minLaborables(p.primera_llamada, m[0]) : null;
+};
+// Promedio de las que sí se devolvieron (contestara o no el cliente). "No aplica" y "ya estaba atendido" no entran.
+const promDevolver = (lista) => {
+  const v = lista.filter((p) => SE_LLAMO.includes(p.resultado)).map(minDevolver).filter((x) => x != null);
+  return v.length ? { min: Math.round(v.reduce((x, y) => x + y, 0) / v.length), n: v.length } : null;
+};
+const entroYSalio = (p) => {
+  const m = p.estado === "cerrada" ? momentoDevuelta(p) : null;
+  if (!m) return `entró ${diaHora(p.primera_llamada)} · sin devolver`;
+  const min = minDevolver(p);
+  return `entró ${diaHora(p.primera_llamada)} · ${m[1]} ${diaHora(m[0])}` + (min != null ? ` · ${min} min` : "");
+};
 // Etiqueta legible de cada resultado de llamada perdida
 const RES_LABEL = (r) => ({ atendida: "Devuelta y atendida", contestada: "Devuelta y atendida", pendiente_tecnico: "Pendiente técnico", ya_atendido: "Ya estaba atendido", no_contesta: "Devuelta, no contestó", spam: "No aplica", no_aplica: "No aplica" })[r] || r;
 // Colores [fondo, texto] por resultado
@@ -117,6 +158,8 @@ function MiniPerdidas({ abiertas, cerradas }) {
   const dev = hoyCe.filter(esContactada);
   const noCont = hoyCe.filter((p) => p.resultado === "no_contesta").length;
   const pct = entraron ? Math.round(dev.length / entraron * 100) : 0;
+  const tiempo = promDevolver(hoyCe);
+  const porQuien = (n) => promDevolver(hoyCe.filter((p) => p.cerrada_por === n));
   const por = {};
   hoyCe.forEach((p) => { if (!p.cerrada_por) return; const q = por[p.cerrada_por] || (por[p.cerrada_por] = { dev: 0, otras: 0, min: 0 }); if (esContactada(p)) { q.dev++; q.min += p.minutos_respuesta || 0; } else q.otras++; });
   const personas = Object.entries(por).sort((a, b) => b[1].dev - a[1].dev);
@@ -128,12 +171,14 @@ function MiniPerdidas({ abiertas, cerradas }) {
   );
   return (
     <div style={{ padding: "12px 18px 14px", borderTop: `1px solid ${C.soft2}`, background: C.soft, display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
         {tile("Hoy entraron", entraron)}
         {tile("Voicemail", vm, C.moradoDark)}
         {tile("Devueltas", dev.length, C.greenDark)}
         {tile("No contestaron", noCont, noCont ? C.redDark : C.ink)}
+        {tile("Promedio en devolver", tiempo ? `${tiempo.min} min` : "—")}
       </div>
+      <div style={{ fontSize: 11, color: C.faint }}>Promedio en devolver: desde que entra la llamada hasta que alguien le da "Atender". Solo horas de trabajo. No cuenta las de "no aplica".</div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ flex: 1, height: 6, background: C.soft2, borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: C.green }} /></div>
         <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, flex: "none" }}>{pct}% devueltas</div>
@@ -141,7 +186,7 @@ function MiniPerdidas({ abiertas, cerradas }) {
       {personas.length > 0 && (
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: C.muted }}>
           <span style={{ fontWeight: 700, color: C.ink2 }}>Quién atendió:</span>
-          {personas.map(([n, q]) => <span key={n}><b style={{ color: C.ink }}>{titulo(n)}</b> {q.dev} devuelta{q.dev !== 1 ? "s" : ""}{q.otras ? ` · ${q.otras} sin contestar/no aplica` : ""}</span>)}
+          {personas.map(([n, q]) => <span key={n}><b style={{ color: C.ink }}>{titulo(n)}</b> {q.dev} devuelta{q.dev !== 1 ? "s" : ""}{porQuien(n) ? ` · promedio ${porQuien(n).min} min` : ""}{q.otras ? ` · ${q.otras} sin contestar/no aplica` : ""}</span>)}
         </div>
       )}
     </div>
@@ -1009,7 +1054,7 @@ export default function Recepcion() {
               )}
               {bit === "perdidas" && perdidasCerr.length > 0 && (
                 <>
-                  <SecHead dot={C.green} t="Atendidas · últimos 7 días" n={perdidasCerr.length} d="Devueltas y cerradas." />
+                  <SecHead dot={C.green} t="Atendidas · últimos 7 días" n={perdidasCerr.length} d={"Devueltas y cerradas." + (promDevolver(perdidasCerr) ? ` Promedio en devolver desde el 23 nov: ${promDevolver(perdidasCerr).min} min (${promDevolver(perdidasCerr).n} llamadas).` : "")} />
                   {perdidasCerr.map((p) => {
                     const [rbg, rfg] = RES_COLOR(p.resultado); const r = [RES_LABEL(p.resultado), rbg, rfg];
                     return (
