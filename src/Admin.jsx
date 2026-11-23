@@ -139,7 +139,7 @@ export default function Admin() {
           <section style={{ ...S.card, borderRadius: 14, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
               <h2 style={{ fontSize: 18 }}>Llamadas perdidas y voicemail</h2>
-              <div style={{ fontSize: 13, color: C.muted }}>{perd ? `${perd.pct_devueltas}% devueltas · tiempo de respuesta ${perd.min_respuesta != null ? perd.min_respuesta + " min promedio" : "—"}${perd.min_respuesta_med != null ? ", mediana " + perd.min_respuesta_med + " min" : ""}` : "Cargando..."}</div>
+              <div style={{ fontSize: 13, color: C.muted }}>{perd ? `${perd.pct_devueltas}% devueltas` : "Cargando..."}</div>
             </div>
             {perd && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
@@ -161,7 +161,7 @@ export default function Admin() {
                   <div key={a.agente} style={{ display: "grid", gridTemplateColumns: "140px 1fr 140px", gap: 10, alignItems: "center", fontSize: 13 }}>
                     <span>{titulo(a.agente)}</span>
                     <div style={{ height: 12, background: C.soft2, borderRadius: 4 }}><div style={{ height: "100%", width: (a.devueltas / Math.max(...perdAg.map((x) => x.devueltas)) * 100) + "%", background: C.morado, borderRadius: 4 }} /></div>
-                    <span style={{ fontFamily: mono, textAlign: "right" }}>{a.devueltas} · {a.min_respuesta != null ? a.min_respuesta + " min" : "—"}</span>
+                    <span style={{ fontFamily: mono, textAlign: "right" }}>{a.devueltas}</span>
                   </div>
                 ))}
               </div>
